@@ -245,6 +245,15 @@ echo "bwrap exited with code: $BWRAP_EXIT"
 read -p "Delete sandbox directory $SANDBOX_HOME and temp $WEZTERM_TEMP? (y/N)" -n 1 -r
 echo    # move to a new line
 if [[ $REPLY =~ ^[Yy]$ ]]; then
+   # Try to delete BTRFS subvolumes first for faster cleanup
+   for subvol in "$JULIA_DEPOT_SANDBOX" "$JULIAUP_SANDBOX" "$TECTONIC_CACHE_SANDBOX"; do
+       if [ -d "$subvol" ] && btrfs subvolume show "$subvol" >/dev/null 2>&1; then
+           echo "Deleting BTRFS subvolume: $subvol"
+           btrfs subvolume delete "$subvol" 2>/dev/null || echo "Failed to delete subvolume, will use rm -rf"
+       fi
+   done
+   
+   # Remove the entire sandbox directory (handles any remaining files/dirs)
    rm -rf "$SANDBOX_HOME"
    rm -rf "$WEZTERM_TEMP"
 fi
