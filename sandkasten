@@ -13,7 +13,7 @@ echo "Setting up sandbox for: $PROJECT_ROOT"
 mkdir -p "$PROJECT_ROOT"
 
 # Create temporary home directory
-SANDBOX_HOME=$(mktemp -d)
+SANDBOX_HOME=$(mktemp -d sandkasten.XXXXXX)
 echo "Sandbox home: $SANDBOX_HOME"
 
 # Set up minimal configuration directories
