@@ -192,9 +192,34 @@ fi
 DISPLAY_BINDS=""
 # Wayland
 DISPLAY_BINDS="--ro-bind $XDG_RUNTIME_DIR/$WAYLAND_DISPLAY $XDG_RUNTIME_DIR/$WAYLAND_DISPLAY"
-if [ -e "$XDG_RUNTIME_DIR/bus" ]; then
-  DISPLAY_BINDS="$DISPLAY_BINDS --bind $XDG_RUNTIME_DIR/bus $XDG_RUNTIME_DIR/bus"
+
+# Set up isolated D-Bus session for sandbox
+SANDBOX_DBUS_DIR="$SANDBOX_HOME/.dbus-session"
+mkdir -p "$SANDBOX_DBUS_DIR"
+
+echo "Starting isolated D-Bus session..."
+# Start D-Bus daemon in background
+dbus-daemon --session --address="unix:path=$SANDBOX_DBUS_DIR/bus" --nofork --print-pid &
+DBUS_PID=$!
+
+# Wait a moment for D-Bus to start
+sleep 1
+
+# Verify D-Bus is running
+if ! kill -0 $DBUS_PID 2>/dev/null; then
+    echo "Failed to start D-Bus daemon"
+    exit 1
 fi
+
+echo "D-Bus daemon started with PID: $DBUS_PID"
+
+# Add cleanup function
+cleanup() {
+    echo "Cleaning up D-Bus daemon..."
+    kill $DBUS_PID 2>/dev/null
+    wait $DBUS_PID 2>/dev/null
+}
+trap cleanup EXIT
 
 # Add DRI access permissions
 GPU_BINDS=""
@@ -262,6 +287,7 @@ bwrap --unshare-user-try --unshare-pid --unshare-uts --unshare-cgroup \
       $COW_BINDS \
       $TOOL_BINDS \
       --bind "$PROJECT_ROOT" "$PROJECT_ROOT" \
+      --bind "$SANDBOX_DBUS_DIR/bus" "$XDG_RUNTIME_DIR/bus" \
       --setenv HOME "/home/$USERNAME" \
       --setenv WAYLAND_DISPLAY "$WAYLAND_DISPLAY" \
       --setenv XDG_RUNTIME_DIR "$XDG_RUNTIME_DIR" \
