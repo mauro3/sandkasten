@@ -4,7 +4,7 @@ A secure, isolated development environment using Linux containers for safe AI-as
 
 ## Overview
 
-Sandkasten creates a sandboxed development environment with Julia, Helix editor, and aider AI coder, running inside a WezTerm terminal session. It uses `bwrap` (bubblewrap) to provide containerized isolation while maintaining access to your project files and development tools.
+Sandkasten creates a sandboxed development environment with Julia, Helix editor, LaTex with Tectonic, and aider AI coder, running inside a WezTerm terminal session. It uses `bwrap` (bubblewrap) to provide containerized isolation while maintaining access to your project files and development tools.
 
 ## Features
 
@@ -20,24 +20,21 @@ Sandkasten creates a sandboxed development environment with Julia, Helix editor,
 ### Basic Usage
 ```bash
 # Run sandbox in current directory
-./sandkasten
+# (do not run as root!)
+sandkasten
 
 # Run sandbox in specific project directory
-./sandkasten /path/to/project
+sandkasten /path/to/project
 ```
 
-### With Julia Support
+### Without Julia Support
 ```bash
-# Enable Julia with full depot copying (slower startup)
-./sandkasten -j
-./sandkasten --withjulia
-
-# Julia support with specific project
-./sandkasten -j /path/to/project
+# Disable Julia
+sandkasten --no-julia
 ```
 
 ### Options
-- `-j, --withjulia`: Enable Julia support (copies ~/.julia, ~/.juliaup)
+- `--no-julia`: disable Julia support (avoids copies of ~/.julia, ~/.juliaup)
 - `project_directory`: Project directory to work in (default: current directory)
 
 ## Requirements
@@ -46,7 +43,7 @@ Sandkasten creates a sandboxed development environment with Julia, Helix editor,
 - WezTerm terminal emulator
 - Fish shell
 - Helix editor
-- Optional: Julia, aider AI coder or other agentic AI assistant
+- Optional: Julia, Tectonic, aider AI coder or other agentic AI assistant
 - BTRFS filesystem (recommended for efficient copying)
 
 ## Installation
@@ -75,24 +72,13 @@ chmod +x sandkasten
 ## How It Works
 
 1. **Sandbox Creation**: Creates isolated environment in `~/.cache/sandkasten/YYYY-MM-DD_XXXXXXXX`
+   - however the project directory gets read-write mounted in its normal place in the filesystem
+   - everything else in the home directory (apart frome some dev-tools) is not accessible
 2. **Configuration Copying**: Copies essential config files (Fish, WezTerm, Helix, Git)
 3. **Julia Environment** (if enabled): Creates copy-on-write copies of Julia depot and related directories
 4. **Container Launch**: Uses `bwrap` to create isolated namespace with restricted system access
 5. **Development Session**: Launches WezTerm with custom environment and project access
 6. **Cleanup**: Optionally removes temporary files after session ends
-
-## Directory Structure
-
-```
-~/.cache/sandkasten/
-└── 2025-01-14_a1b2c3d4/          # Sandbox instance
-    ├── .config/                   # Copied configurations
-    ├── .julia/                    # Julia depot (if -j used)
-    ├── .juliaup/                  # Julia installer (if -j used)
-    ├── .cache/Tectonic/           # LaTeX cache
-    ├── bin/                       # Custom scripts
-    └── terminal.sh                # Session launcher
-```
 
 ## Security Model
 
@@ -156,8 +142,7 @@ Really 1,2 & 3 are needed to actually work with the project and allow AI interac
 ### Common Issues
 
 **Slow startup with Julia**:
-- Use sandbox without `-j` flag for faster startup
-- Julia copying can take time with large depots
+- use btrfs subvolume for .julia
 
 **Permission errors**:
 - Ensure `bwrap` is installed and accessible
@@ -173,11 +158,7 @@ Really 1,2 & 3 are needed to actually work with the project and allow AI interac
 
 ### Cleanup
 
-Remove old sandbox directories:
+Remove old sandbox directories by running:
 ```bash
-# Remove all sandbox directories
-rm -rf ~/.cache/sandkasten/
-
-# Remove directories older than 7 days
-find ~/.cache/sandkasten/ -type d -mtime +7 -exec rm -rf {} +
+sandkasten-cleanup
 ```
