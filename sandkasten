@@ -54,6 +54,7 @@ mkdir -p "$SANDBOX_HOME/.config/helix"
 mkdir -p "$SANDBOX_HOME/.local/share/fish"
 mkdir -p "$SANDBOX_HOME/.cargo/bin/"
 mkdir -p "$SANDBOX_HOME/bin"
+mkdir -p "$SANDBOX_HOME/julia"
 
 # Copy essential configuration files
 [ -f "$HOME/.config/fish/config.fish" ] && cp "$HOME/.config/fish/config.fish" "$SANDBOX_HOME/.config/fish/"
@@ -63,6 +64,9 @@ mkdir -p "$SANDBOX_HOME/bin"
 [ -f "$HOME/.gitignore.global" ] && cp "$HOME/.gitignore.global" "$SANDBOX_HOME"
 [ -f "$HOME/.aider.conf.yml" ] && cp "$HOME/.aider.conf.yml" "$SANDBOX_HOME"
 [ -f "$HOME/.gitconfig" ] && cp "$HOME/.gitconfig" "$SANDBOX_HOME"
+[ -d "$HOME/julia/dot-julia-config" ] && cp -r "$HOME/julia/dot-julia-config" "$SANDBOX_HOME/julia/"
+[ -d "$HOME/julia/dot-julia-environments" ] && cp -r "$HOME/julia/dot-julia-environments" "$SANDBOX_HOME/julia/"
+# [ -d "$HOME/julia/dot-julia-dev" ] && cp -r "$HOME/julia/dot-julia-dev" "$SANDBOX_HOME/julia/"
 # copy configuration folders
 # [ -d "$HOME/.config/meld" ] && cp -r "$HOME/.config/meld" "$SANDBOX_HOME/.config/"
 [ -d "$HOME/.aider" ] && cp -r "$HOME/.aider" "$SANDBOX_HOME"
@@ -206,6 +210,12 @@ echo "Launching sandboxed WezTerm..."
 
 # Execute bwrap without variable expansion in the command string
 # note that the order of binds is important
+#
+# To debug if something failes because of missing dev-access,
+# run strace and look for failed /dev access:
+# strace -f -e trace=openat,newfstatat ./sandkasten 2>&1 | grep -E "/dev.*ENOENT"
+# 
+# Alternaltivly just comment out all --tmpfls /dev/... lines
 bwrap --unshare-user-try --unshare-pid --unshare-uts --unshare-cgroup \
       --ro-bind /usr /usr \
       --ro-bind /bin /bin \
@@ -227,6 +237,23 @@ bwrap --unshare-user-try --unshare-pid --unshare-uts --unshare-cgroup \
       --tmpfs /dev/mapper \
       --tmpfs /dev/net \
       --tmpfs /dev/v4l \
+      --tmpfs /dev/hidraw0 \
+      --tmpfs /dev/hidraw1 \
+      --tmpfs /dev/media0 \
+      --tmpfs /dev/media1 \
+      --tmpfs /dev/video0 \
+      --tmpfs /dev/video1 \
+      --tmpfs /dev/video2 \
+      --tmpfs /dev/video3 \
+      --tmpfs /dev/watchdog \
+      --tmpfs /dev/watchdog0 \
+      --tmpfs /dev/rfkill \
+      --tmpfs /dev/snapshot \
+      --tmpfs /dev/vboxdrv \
+      --tmpfs /dev/vboxdrvu \
+      --tmpfs /dev/vboxnetctl \
+      --tmpfs /dev/vboxusb \
+      --tmpfs /dev/vfio \
       $GPU_BINDS \
       --bind "$WEZTERM_TEMP" /tmp \
       $DISPLAY_BINDS \
