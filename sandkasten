@@ -102,7 +102,12 @@ else
 fi
 
 # Set up Julia binds for bwrap
-COW_BINDS="--bind \"$JULIA_DEPOT_SANDBOX\" \"/home/$USERNAME/.julia\" --bind \"$JULIAUP_SANDBOX\" \"/home/$USERNAME/.juliaup\" --bind \"$TECTONIC_CACHE_SANDBOX\" \"/home/$USERNAME/.cache/Tectonic\""
+if [ "$WITH_JULIA" = true ]; then
+    COW_BINDS="--bind $JULIA_DEPOT_SANDBOX /home/$USERNAME/.julia --bind $JULIAUP_SANDBOX /home/$USERNAME/.juliaup"
+else
+    COW_BINDS=""
+fi
+COW_BINDS="$COW_BINDS --bind $TECTONIC_CACHE_SANDBOX /home/$USERNAME/.cache/Tectonic"
 
 
 
