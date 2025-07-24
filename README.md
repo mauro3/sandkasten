@@ -1,0 +1,189 @@
+# Sandkasten
+
+A secure, isolated development environment using Linux containers for safe AI-assisted coding.
+
+## Overview
+
+Sandkasten creates a sandboxed development environment with Julia, Helix editor, and aider AI coder, running inside a WezTerm terminal session. It uses `bwrap` (bubblewrap) to provide containerized isolation while maintaining access to your project files and development tools.
+
+## Features
+
+- **Secure Isolation**: Uses Linux namespaces and restricted filesystem access
+- **Development Tools**: Pre-configured Julia, Helix editor, and aider AI assistant
+- **GPU Access**: Hardware-accelerated graphics for Julia plotting
+- **Copy-on-Write**: Efficient file copying using BTRFS reflinks when available
+- **Project Integration**: Mounts your project directory for seamless development
+- **Custom Environment**: Sandbox-specific shell prompt and configuration
+
+## Usage
+
+### Basic Usage
+```bash
+# Run sandbox in current directory
+./sandkasten
+
+# Run sandbox in specific project directory
+./sandkasten /path/to/project
+```
+
+### With Julia Support
+```bash
+# Enable Julia with full depot copying (slower startup)
+./sandkasten -j
+./sandkasten --withjulia
+
+# Julia support with specific project
+./sandkasten -j /path/to/project
+```
+
+### Options
+- `-j, --withjulia`: Enable Julia support (copies ~/.julia, ~/.juliaup)
+- `project_directory`: Project directory to work in (default: current directory)
+
+## Requirements
+
+- Linux system with bubblewrap (`bwrap`) installed
+- WezTerm terminal emulator
+- Fish shell
+- Helix editor
+- Optional: Julia, aider AI coder
+- BTRFS filesystem (recommended for efficient copying)
+
+## Installation
+
+1. Install dependencies:
+```bash
+# Arch Linux
+sudo pacman -S bubblewrap wezterm fish helix
+
+# Ubuntu/Debian
+sudo apt install bubblewrap wezterm fish-shell helix
+```
+
+2. Make the script executable:
+```bash
+chmod +x sandkasten
+```
+
+3. Optionally, add to your PATH or create a symlink.
+
+## How It Works
+
+1. **Sandbox Creation**: Creates isolated environment in `~/.cache/sandkasten/YYYY-MM-DD_XXXXXXXX`
+2. **Configuration Copying**: Copies essential config files (Fish, WezTerm, Helix, Git)
+3. **Julia Environment** (if enabled): Creates copy-on-write copies of Julia depot and related directories
+4. **Container Launch**: Uses `bwrap` to create isolated namespace with restricted system access
+5. **Development Session**: Launches WezTerm with custom environment and project access
+6. **Cleanup**: Optionally removes temporary files after session ends
+
+## Directory Structure
+
+```
+~/.cache/sandkasten/
+└── 2025-01-14_a1b2c3d4/          # Sandbox instance
+    ├── .config/                   # Copied configurations
+    ├── .julia/                    # Julia depot (if -j used)
+    ├── .juliaup/                  # Julia installer (if -j used)
+    ├── .cache/Tectonic/           # LaTeX cache
+    ├── bin/                       # Custom scripts
+    └── terminal.sh                # Session launcher
+```
+
+## Security Model
+
+### Protection Provided
+- **Filesystem Isolation**: Limited access to system directories (read-only)
+- **Process Isolation**: Separate PID namespace prevents interference
+- **User Namespace**: Isolated user context
+- **Network Monitoring**: All network access is visible but not restricted
+
+### What's Isolated
+- System directories (`/usr`, `/bin`, `/lib`) are read-only
+- Julia depot and related directories are copied (not shared)
+- Temporary files are contained within sandbox
+- Configuration changes don't affect main system
+
+### What's NOT Isolated
+- **Network Access**: Full internet connectivity (for AI tools, package downloads)
+- **Project Directory**: Direct read/write access to your project files
+- **GPU/Hardware**: Direct access to graphics hardware
+- **API Keys**: Environment variables are passed through
+
+## Security Considerations
+
+⚠️ **Important**: This sandbox provides protection against **accidental damage** but has significant limitations against **malicious intent**.
+
+### Known Security Issues
+
+1. **Network Access**: Full network connectivity allows:
+   - Data exfiltration of project files
+   - Downloading/uploading arbitrary content
+   - Communication with external services
+
+2. **Project Directory Exposure**: 
+   - AI has full read/write access to your project
+   - Can modify, delete, or corrupt project files
+   - Can access sensitive data in project directory
+
+3. **API Key Exposure**:
+   - OpenAI and Anthropic API keys are passed through
+   - Could be logged or misused by AI tools
+
+4. **Hardware Access**:
+   - Full GPU access could potentially be exploited
+   - Access to `/dev` directory (though containerized)
+
+5. **Configuration Leakage**:
+   - Git configuration and other sensitive configs are copied
+   - Could expose personal information or credentials
+
+### Recommended Additional Precautions
+
+- **Backup Projects**: Always backup before AI-assisted sessions
+- **Review Changes**: Carefully review all AI-generated modifications
+- **Limit Sensitive Projects**: Avoid using with projects containing secrets
+- **Monitor Network**: Consider using network monitoring tools
+- **Regular Cleanup**: Remove old sandbox directories periodically
+
+## Troubleshooting
+
+### Common Issues
+
+**Slow startup with Julia**:
+- Use sandbox without `-j` flag for faster startup
+- Julia copying can take time with large depots
+
+**Permission errors**:
+- Ensure `bwrap` is installed and accessible
+- Check that project directory is readable
+
+**Graphics issues**:
+- Verify GPU drivers are installed
+- Check `/dev/dri` device permissions
+
+**Missing tools**:
+- Install required dependencies (WezTerm, Fish, Helix)
+- Verify tools are in PATH
+
+### Cleanup
+
+Remove old sandbox directories:
+```bash
+# Remove all sandbox directories
+rm -rf ~/.cache/sandkasten/
+
+# Remove directories older than 7 days
+find ~/.cache/sandkasten/ -type d -mtime +7 -exec rm -rf {} +
+```
+
+## Contributing
+
+Contributions welcome! Please consider:
+- Security improvements
+- Performance optimizations
+- Additional tool integrations
+- Better isolation mechanisms
+
+## License
+
+This project is provided as-is for educational and development purposes. Use at your own risk.
