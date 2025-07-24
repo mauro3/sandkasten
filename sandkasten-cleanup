@@ -22,18 +22,14 @@ cleanup_sandbox_dir() {
     
     echo "Cleaning up: $sandbox_dir"
     
-    # Find and delete BTRFS subvolumes first
+    # Try to delete BTRFS subvolumes first
     local found_subvolumes=false
     for subvol in "$sandbox_dir"/.julia "$sandbox_dir"/.juliaup "$sandbox_dir/.cache/Tectonic"; do
         if [ -d "$subvol" ]; then
-            # Check if it's a subvolume
-            if btrfs subvolume show "$subvol" >/dev/null 2>&1; then
-                echo "  Deleting BTRFS subvolume: $subvol"
-                if sudo btrfs subvolume delete "$subvol"; then
-                    found_subvolumes=true
-                else
-                    echo "  Failed to delete subvolume: $subvol"
-                fi
+            echo "  Trying to delete BTRFS subvolume: $subvol"
+            if btrfs subvolume delete "$subvol" 2>/dev/null; then
+                echo "  Successfully deleted subvolume: $subvol"
+                found_subvolumes=true
             fi
         fi
     done
