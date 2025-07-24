@@ -1,0 +1,78 @@
+#!/bin/bash
+#
+# Clean up sandkasten directories and their BTRFS subvolumes
+# Usage: sandkasten-cleanup [dir1] [dir2] ...
+# If no directories specified, cleans all directories in ~/.cache/sandkasten/
+
+CACHE_DIR="$HOME/.cache/sandkasten"
+
+if [ ! -d "$CACHE_DIR" ]; then
+    echo "No sandkasten cache directory found at $CACHE_DIR"
+    exit 0
+fi
+
+# Function to clean up a single sandbox directory
+cleanup_sandbox_dir() {
+    local sandbox_dir="$1"
+    
+    if [ ! -d "$sandbox_dir" ]; then
+        echo "Directory does not exist: $sandbox_dir"
+        return 1
+    fi
+    
+    echo "Cleaning up: $sandbox_dir"
+    
+    # Find and delete BTRFS subvolumes first
+    local found_subvolumes=false
+    for subvol in "$sandbox_dir"/.julia "$sandbox_dir"/.juliaup "$sandbox_dir/.cache/Tectonic"; do
+        if [ -d "$subvol" ]; then
+            # Check if it's a subvolume
+            if btrfs subvolume show "$subvol" >/dev/null 2>&1; then
+                echo "  Deleting BTRFS subvolume: $subvol"
+                if sudo btrfs subvolume delete "$subvol"; then
+                    found_subvolumes=true
+                else
+                    echo "  Failed to delete subvolume: $subvol"
+                fi
+            fi
+        fi
+    done
+    
+    # Remove the entire directory
+    echo "  Removing directory: $sandbox_dir"
+    rm -rf "$sandbox_dir"
+    
+    if [ "$found_subvolumes" = true ]; then
+        echo "  ✓ Cleaned up with subvolume deletion"
+    else
+        echo "  ✓ Cleaned up (no subvolumes found)"
+    fi
+}
+
+# If arguments provided, clean only those directories
+if [ $# -gt 0 ]; then
+    for dir in "$@"; do
+        # Handle both absolute paths and relative names
+        if [[ "$dir" = /* ]]; then
+            cleanup_sandbox_dir "$dir"
+        else
+            cleanup_sandbox_dir "$CACHE_DIR/$dir"
+        fi
+    done
+else
+    # Clean all directories in cache
+    echo "Cleaning all sandkasten directories in $CACHE_DIR"
+    
+    if [ -z "$(ls -A "$CACHE_DIR" 2>/dev/null)" ]; then
+        echo "No directories found to clean"
+        exit 0
+    fi
+    
+    for sandbox_dir in "$CACHE_DIR"/*; do
+        if [ -d "$sandbox_dir" ]; then
+            cleanup_sandbox_dir "$sandbox_dir"
+        fi
+    done
+    
+    echo "All sandkasten directories cleaned"
+fi
