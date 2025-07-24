@@ -6,18 +6,18 @@
 # - aider AI coder
 
 # Parse arguments
-WITH_JULIA=false
+WITH_JULIA=true
 PROJECT_ROOT=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --withjulia|-j)
-            WITH_JULIA=true
+        --no-julia)
+            WITH_JULIA=false
             shift
             ;;
         -*)
             echo "Unknown option $1"
-            echo "Usage: $0 [--withjulia|-j] [project_directory]"
+            echo "Usage: $0 [--no-julia] [project_directory]"
             exit 1
             ;;
         *)
@@ -31,7 +31,9 @@ done
 PROJECT_ROOT=$(realpath "${PROJECT_ROOT:-$(pwd)}")
 echo "Setting up sandbox for: $PROJECT_ROOT"
 if [ "$WITH_JULIA" = true ]; then
-    echo "Julia support enabled (this may take a moment to copy files)"
+    echo "Julia support enabled"
+else
+    echo "Julia support disabled (use without --no-julia to enable)"
 fi
 
 # Ensure the project directory exists
@@ -73,31 +75,46 @@ mkdir -p "$SANDBOX_HOME/bin"
 COW_BINDS=""
 # Julia-related directories (only if requested)
 if [ "$WITH_JULIA" = true ]; then
-    # Create Julia depot copy (using COW if available)
+    # Create Julia depot snapshot/copy
     JULIA_DEPOT_SANDBOX="$SANDBOX_HOME/.julia"
     if [ -d "$HOME/.julia" ]; then
-        echo "Copying Julia depot (using COW if available)..."
-        cp -r --reflink=auto "$HOME/.julia" "$JULIA_DEPOT_SANDBOX"
+        echo "Creating Julia depot snapshot..."
+        if btrfs subvolume snapshot "$HOME/.julia" "$JULIA_DEPOT_SANDBOX" 2>/dev/null; then
+            echo "BTRFS snapshot created successfully"
+        else
+            echo "BTRFS snapshot failed, copying with COW if available..."
+            cp -r --reflink=auto "$HOME/.julia" "$JULIA_DEPOT_SANDBOX"
+        fi
     else
         mkdir -p "$JULIA_DEPOT_SANDBOX"
     fi
 
-    # Create Juliaup directory copy (using COW if available)
+    # Create Juliaup directory snapshot/copy
     JULIAUP_SANDBOX="$SANDBOX_HOME/.juliaup"
     if [ -d "$HOME/.juliaup" ]; then
-        echo "Copying .juliaup directory (using COW if available)..."
-        cp -r --reflink=auto "$HOME/.juliaup" "$JULIAUP_SANDBOX"
+        echo "Creating .juliaup snapshot..."
+        if btrfs subvolume snapshot "$HOME/.juliaup" "$JULIAUP_SANDBOX" 2>/dev/null; then
+            echo "BTRFS snapshot created successfully"
+        else
+            echo "BTRFS snapshot failed, copying with COW if available..."
+            cp -r --reflink=auto "$HOME/.juliaup" "$JULIAUP_SANDBOX"
+        fi
     else
         mkdir -p "$JULIAUP_SANDBOX"
     fi
     COW_BINDS="--bind $JULIA_DEPOT_SANDBOX /home/$USERNAME/.julia --bind $JULIAUP_SANDBOX /home/$USERNAME/.juliaup"
 fi
-# Create Tectonic cache directory copy (using COW if available)
+# Create Tectonic cache directory snapshot/copy
 TECTONIC_CACHE_SANDBOX="$SANDBOX_HOME/.cache/Tectonic"
 if [ -d "$HOME/.cache/Tectonic" ]; then
-    echo "Copying Tectonic cache (using COW if available)..."
+    echo "Creating Tectonic cache snapshot..."
     mkdir -p "$SANDBOX_HOME/.cache"
-    cp -r --reflink=auto "$HOME/.cache/Tectonic" "$TECTONIC_CACHE_SANDBOX"
+    if btrfs subvolume snapshot "$HOME/.cache/Tectonic" "$TECTONIC_CACHE_SANDBOX" 2>/dev/null; then
+        echo "BTRFS snapshot created successfully"
+    else
+        echo "BTRFS snapshot failed, copying with COW if available..."
+        cp -r --reflink=auto "$HOME/.cache/Tectonic" "$TECTONIC_CACHE_SANDBOX"
+    fi
 else
     mkdir -p "$TECTONIC_CACHE_SANDBOX"
 fi
