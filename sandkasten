@@ -218,20 +218,15 @@ bwrap --unshare-user-try --unshare-pid --unshare-uts --unshare-cgroup \
       --ro-bind /etc/hosts /etc/hosts \
       --ro-bind /etc/hostname /etc/hostname \
       --share-net \
-      --tmpfs /dev \
-      --dev-bind /dev/null /dev/null \
-      --dev-bind /dev/zero /dev/zero \
-      --dev-bind /dev/full /dev/full \
-      --dev-bind /dev/random /dev/random \
-      --dev-bind /dev/urandom /dev/urandom \
-      --dev-bind /dev/tty /dev/tty \
-      --dev-bind /dev/ptmx /dev/ptmx \
-      --bind /dev/pts /dev/pts \
-      --symlink /proc/self/fd/0 /dev/stdin \
-      --symlink /proc/self/fd/1 /dev/stdout \
-      --symlink /proc/self/fd/2 /dev/stderr \
-      --symlink /proc/self/fd /dev/fd \
-      --tmpfs /dev/shm \
+      --dev /dev \
+      --tmpfs /dev/snd \
+      --tmpfs /dev/input \
+      --tmpfs /dev/usb \
+      --tmpfs /dev/disk \
+      --tmpfs /dev/block \
+      --tmpfs /dev/mapper \
+      --tmpfs /dev/net \
+      --tmpfs /dev/v4l \
       $GPU_BINDS \
       --bind "$WEZTERM_TEMP" /tmp \
       $DISPLAY_BINDS \
