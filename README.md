@@ -46,7 +46,7 @@ Sandkasten creates a sandboxed development environment with Julia, Helix editor,
 - WezTerm terminal emulator
 - Fish shell
 - Helix editor
-- Optional: Julia, aider AI coder
+- Optional: Julia, aider AI coder or other agentic AI assistant
 - BTRFS filesystem (recommended for efficient copying)
 
 ## Installation
@@ -175,15 +175,3 @@ rm -rf ~/.cache/sandkasten/
 # Remove directories older than 7 days
 find ~/.cache/sandkasten/ -type d -mtime +7 -exec rm -rf {} +
 ```
-
-## Contributing
-
-Contributions welcome! Please consider:
-- Security improvements
-- Performance optimizations
-- Additional tool integrations
-- Better isolation mechanisms
-
-## License
-
-This project is provided as-is for educational and development purposes. Use at your own risk.
