@@ -67,6 +67,11 @@ chmod +x sandkasten
 
 3. Optionally, add to your PATH or create a symlink.
 
+4. BTRFS setup, if using BTRFS:
+
+- make `~./julia` a subvolume
+- use the `user_subvol_rm_allowed` mount option
+
 ## How It Works
 
 1. **Sandbox Creation**: Creates isolated environment in `~/.cache/sandkasten/YYYY-MM-DD_XXXXXXXX`
