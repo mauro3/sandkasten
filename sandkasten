@@ -52,6 +52,7 @@ mkdir -p "$SANDBOX_HOME/.config/fish"
 mkdir -p "$SANDBOX_HOME/.config/wezterm"
 mkdir -p "$SANDBOX_HOME/.config/helix"
 mkdir -p "$SANDBOX_HOME/.local/share/fish"
+mkdir -p "$SANDBOX_HOME/.cargo/bin/"
 mkdir -p "$SANDBOX_HOME/bin"
 
 # Copy essential configuration files
@@ -60,10 +61,10 @@ mkdir -p "$SANDBOX_HOME/bin"
 [ -f "$HOME/.config/helix/config.toml" ] && cp "$HOME/.config/helix/config.toml" "$SANDBOX_HOME/.config/helix/"
 [ -f "$HOME/.config/helix/languages.toml" ] && cp "$HOME/.config/helix/languages.toml" "$SANDBOX_HOME/.config/helix/"
 [ -f "$HOME/.gitignore.global" ] && cp "$HOME/.gitignore.global" "$SANDBOX_HOME"
-[ -f "$HOME/.aider.conf.yml" ] && cp "$HOME/.aider.conf.yaml" "$SANDBOX_HOME"
+[ -f "$HOME/.aider.conf.yml" ] && cp "$HOME/.aider.conf.yml" "$SANDBOX_HOME"
 [ -f "$HOME/.gitconfig" ] && cp "$HOME/.gitconfig" "$SANDBOX_HOME"
 # copy configuration folders
-[ -d "$HOME/.config/meld" ] && cp -r "$HOME/.config/meld" "$SANDBOX_HOME/.config/"
+# [ -d "$HOME/.config/meld" ] && cp -r "$HOME/.config/meld" "$SANDBOX_HOME/.config/"
 [ -d "$HOME/.aider" ] && cp -r "$HOME/.aider" "$SANDBOX_HOME"
 # copy needed shell scripts
 [ -f "$HOME/bin/juliap" ] && cp "$HOME/bin/juliap" "$SANDBOX_HOME/bin/"
