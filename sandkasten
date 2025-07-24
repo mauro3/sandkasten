@@ -83,7 +83,7 @@ if [ "$WITH_JULIA" = true ]; then
             echo "BTRFS snapshot created successfully"
         else
             echo "BTRFS snapshot failed, copying with COW if available..."
-            cp -r --reflink=auto "$HOME/.julia" "$JULIA_DEPOT_SANDBOX"
+            cp -r "$HOME/.julia" "$JULIA_DEPOT_SANDBOX"
         fi
     else
         mkdir -p "$JULIA_DEPOT_SANDBOX"
@@ -97,7 +97,7 @@ if [ "$WITH_JULIA" = true ]; then
             echo "BTRFS snapshot created successfully"
         else
             echo "BTRFS snapshot failed, copying with COW if available..."
-            cp -r --reflink=auto "$HOME/.juliaup" "$JULIAUP_SANDBOX"
+            cp -r "$HOME/.juliaup" "$JULIAUP_SANDBOX"
         fi
     else
         mkdir -p "$JULIAUP_SANDBOX"
@@ -113,7 +113,7 @@ if [ -d "$HOME/.cache/Tectonic" ]; then
         echo "BTRFS snapshot created successfully"
     else
         echo "BTRFS snapshot failed, copying with COW if available..."
-        cp -r --reflink=auto "$HOME/.cache/Tectonic" "$TECTONIC_CACHE_SANDBOX"
+        cp -r "$HOME/.cache/Tectonic" "$TECTONIC_CACHE_SANDBOX"
     fi
 else
     mkdir -p "$TECTONIC_CACHE_SANDBOX"
