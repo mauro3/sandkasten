@@ -69,8 +69,9 @@ mkdir -p "$SANDBOX_HOME/bin"
 [ -f "$HOME/bin/vale-ls" ] && cp "$HOME/bin/vale-ls" "$SANDBOX_HOME/bin/"
 [ -f "$HOME/.cargo/bin/simple-completion-language-server" ] && cp "$HOME/.cargo/bin/simple-completion-language-server" "$SANDBOX_HOME/.cargo/bin/simple-completion-language-server"
 
+# Larger directories are copyed on write (COW), if possible
+COW_BINDS=""
 # Julia-related directories (only if requested)
-JULIA_BINDS=""
 if [ "$WITH_JULIA" = true ]; then
     # Create Julia depot copy (using COW if available)
     JULIA_DEPOT_SANDBOX="$SANDBOX_HOME/.julia"
@@ -89,20 +90,19 @@ if [ "$WITH_JULIA" = true ]; then
     else
         mkdir -p "$JULIAUP_SANDBOX"
     fi
-
-    # Create Tectonic cache directory copy (using COW if available)
-    TECTONIC_CACHE_SANDBOX="$SANDBOX_HOME/.cache/Tectonic"
-    if [ -d "$HOME/.cache/Tectonic" ]; then
-        echo "Copying Tectonic cache (using COW if available)..."
-        mkdir -p "$SANDBOX_HOME/.cache"
-        cp -r --reflink=auto "$HOME/.cache/Tectonic" "$TECTONIC_CACHE_SANDBOX"
-    else
-        mkdir -p "$TECTONIC_CACHE_SANDBOX"
-    fi
-
-    # Set up Julia binds for bwrap
-    JULIA_BINDS="--bind \"$JULIA_DEPOT_SANDBOX\" \"/home/$USERNAME/.julia\" --bind \"$JULIAUP_SANDBOX\" \"/home/$USERNAME/.juliaup\" --bind \"$TECTONIC_CACHE_SANDBOX\" \"/home/$USERNAME/.cache/Tectonic\""
 fi
+# Create Tectonic cache directory copy (using COW if available)
+TECTONIC_CACHE_SANDBOX="$SANDBOX_HOME/.cache/Tectonic"
+if [ -d "$HOME/.cache/Tectonic" ]; then
+    echo "Copying Tectonic cache (using COW if available)..."
+    mkdir -p "$SANDBOX_HOME/.cache"
+    cp -r --reflink=auto "$HOME/.cache/Tectonic" "$TECTONIC_CACHE_SANDBOX"
+else
+    mkdir -p "$TECTONIC_CACHE_SANDBOX"
+fi
+
+# Set up Julia binds for bwrap
+COW_BINDS="--bind \"$JULIA_DEPOT_SANDBOX\" \"/home/$USERNAME/.julia\" --bind \"$JULIAUP_SANDBOX\" \"/home/$USERNAME/.juliaup\" --bind \"$TECTONIC_CACHE_SANDBOX\" \"/home/$USERNAME/.cache/Tectonic\""
 
 
 
@@ -207,7 +207,7 @@ bwrap --unshare-user-try --unshare-pid --unshare-uts --unshare-cgroup \
       $DISPLAY_BINDS \
       --proc /proc \
       --bind "$SANDBOX_HOME" "/home/$USERNAME" \
-      $JULIA_BINDS \
+      $COW_BINDS \
       $TOOL_BINDS \
       --bind "$PROJECT_ROOT" "$PROJECT_ROOT" \
       --setenv HOME "/home/$USERNAME" \
