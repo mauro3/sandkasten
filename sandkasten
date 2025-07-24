@@ -83,7 +83,7 @@ exec fish
 EOF
 chmod +x "$SANDBOX_HOME/terminal.sh"
 
-# Create a temp directory that will persist during the sandbox session
+# Create a temp directory (i.e. /tmp) that will persist during the sandbox session
 WEZTERM_TEMP=$(mktemp -d)
 echo "WezTerm temp: $WEZTERM_TEMP"
 
