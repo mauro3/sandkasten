@@ -225,7 +225,7 @@ bwrap --unshare-user-try --unshare-pid --unshare-uts --unshare-cgroup \
       --dev-bind /dev/urandom /dev/urandom \
       --dev-bind /dev/tty /dev/tty \
       --dev-bind /dev/ptmx /dev/ptmx \
-      --bind /dev/pts /dev/pts \
+      --dev-bind /dev/pts /dev/pts \
       --tmpfs /dev/shm \
       $GPU_BINDS \
       --bind "$WEZTERM_TEMP" /tmp \
