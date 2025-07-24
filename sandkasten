@@ -247,12 +247,13 @@ echo    # move to a new line
 if [[ $REPLY =~ ^[Yy]$ ]]; then
    # Try to delete BTRFS subvolumes first for faster cleanup
    for subvol in "$JULIA_DEPOT_SANDBOX" "$JULIAUP_SANDBOX" "$TECTONIC_CACHE_SANDBOX"; do
+       echo $subvol
        if [ -d "$subvol" ] && btrfs subvolume show "$subvol" >/dev/null 2>&1; then
            echo "Deleting BTRFS subvolume: $subvol"
            btrfs subvolume delete "$subvol" 2>/dev/null || echo "Failed to delete subvolume, will use rm -rf"
        fi
    done
-   
+   exit 1
    # Remove the entire sandbox directory (handles any remaining files/dirs)
    rm -rf "$SANDBOX_HOME"
    rm -rf "$WEZTERM_TEMP"
