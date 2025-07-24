@@ -1,0 +1,173 @@
+#!/bin/bash
+#
+# Run development environment in sandbox by spawning a wezterm session. Tools include:
+# - Julia lang
+# - Helix editor
+# - aider AI coder
+
+# Project directory from argument or current directory
+PROJECT_ROOT=$(realpath "${1:-$(pwd)}")
+echo "Setting up sandbox for: $PROJECT_ROOT"
+
+# Ensure the project directory exists
+mkdir -p "$PROJECT_ROOT"
+
+# Create temporary home directory
+SANDBOX_HOME=$(mktemp -d)
+echo "Sandbox home: $SANDBOX_HOME"
+
+# Set up minimal configuration directories
+mkdir -p "$SANDBOX_HOME/.config/fish"
+mkdir -p "$SANDBOX_HOME/.config/wezterm"
+mkdir -p "$SANDBOX_HOME/.config/helix"
+mkdir -p "$SANDBOX_HOME/.local/share/fish"
+mkdir -p "$SANDBOX_HOME/bin"
+
+# Copy essential configuration files
+[ -f "$HOME/.config/fish/config.fish" ] && cp "$HOME/.config/fish/config.fish" "$SANDBOX_HOME/.config/fish/"
+[ -f "$HOME/.config/wezterm/wezterm.lua" ] && cp "$HOME/.config/wezterm/wezterm.lua" "$SANDBOX_HOME/.config/wezterm/"
+[ -f "$HOME/.config/helix/config.toml" ] && cp "$HOME/.config/helix/config.toml" "$SANDBOX_HOME/.config/helix/"
+[ -f "$HOME/.config/helix/languages.toml" ] && cp "$HOME/.config/helix/languages.toml" "$SANDBOX_HOME/.config/helix/"
+[ -f "$HOME/.gitignore.global" ] && cp "$HOME/.gitignore.global" "$SANDBOX_HOME"
+[ -f "$HOME/.aider.conf.yml" ] && cp "$HOME/.aider.conf.yaml" "$SANDBOX_HOME"
+[ -f "$HOME/.gitconfig" ] && cp "$HOME/.gitconfig" "$SANDBOX_HOME"
+# copy configuration folders
+[ -d "$HOME/.config/meld" ] && cp -r "$HOME/.config/meld" "$SANDBOX_HOME/.config/"
+[ -d "$HOME/.aider" ] && cp -r "$HOME/.aider" "$SANDBOX_HOME"
+# copy needed shell scripts
+[ -f "$HOME/bin/juliap" ] && cp "$HOME/bin/juliap" "$SANDBOX_HOME/bin/"
+[ -f "$HOME/bin/helix-repl-start.sh" ] && cp "$HOME/bin/helix-repl-start.sh" "$SANDBOX_HOME/bin/"
+[ -f "$HOME/bin/vale-ls" ] && cp "$HOME/bin/vale-ls" "$SANDBOX_HOME/bin/"
+[ -f "$HOME/.cargo/bin/simple-completion-language-server" ] && cp "$HOME/.cargo/bin/simple-completion-language-server" "$SANDBOX_HOME/.cargo/bin/simple-completion-language-server"
+
+
+
+# Patch wezterm.lua to uncomment sandbox-specific settings
+if [ -f "$SANDBOX_HOME/.config/wezterm/wezterm.lua" ]; then
+  sed -i 's/-- config.use_fancy_tab_bar = false/config.use_fancy_tab_bar = false/' "$SANDBOX_HOME/.config/wezterm/wezterm.lua"
+  sed -i 's/-- config.colors.tab_bar = { background = "#9C923C" }/config.colors.tab_bar = { background = "#9C923C" }/' "$SANDBOX_HOME/.config/wezterm/wezterm.lua"
+fi
+
+# Create sandbox-specific fish configuration
+cat > "$SANDBOX_HOME/.config/fish/sandbox.fish" <<EOF
+# Sandbox-specific Fish configuration
+function fish_prompt
+    set_color yellow
+    echo -n "[SANDBOX] "
+    set_color cyan
+    echo -n (prompt_pwd)
+    set_color normal
+    echo -n "> "
+end
+
+set -x EDITOR hx
+set -x OPENAI_API_KEY "$OPENAI_API_KEY"
+set -x ANTHROPIC_API_KEY "$ANTHROPIC_API_KEY"
+
+# Graphics configuration for Julia
+set -x LIBGL_ALWAYS_SOFTWARE "1"
+
+
+# Welcome message
+echo "🔒 Sandboxed Environment: $PROJECT_ROOT 🔒"
+EOF
+
+# Append sandbox config to config.fish
+echo "source ~/.config/fish/sandbox.fish" >> "$SANDBOX_HOME/.config/fish/config.fish"
+
+# Terminal launcher script
+cat > "$SANDBOX_HOME/terminal.sh" <<EOF
+#!/bin/bash
+cd "$PROJECT_ROOT" || echo "Failed to change to project directory: \$?"
+exec fish
+EOF
+chmod +x "$SANDBOX_HOME/terminal.sh"
+
+# Create a temp directory that will persist during the sandbox session
+WEZTERM_TEMP=$(mktemp -d)
+echo "WezTerm temp: $WEZTERM_TEMP"
+
+# Get user name
+USERNAME=$(whoami)
+
+# Get path to aider
+AIDER_PATH=$(which aider || echo "")
+
+# Tool binds - only add aider as requested
+TOOL_BINDS=""
+if [ -n "$AIDER_PATH" ]; then
+    TOOL_BINDS="$TOOL_BINDS --ro-bind $AIDER_PATH $AIDER_PATH"
+    # Add UV directory for aider
+    if [ -d "$HOME/.local/share/uv" ]; then
+        TOOL_BINDS="$TOOL_BINDS --ro-bind $HOME/.local/share/uv $HOME/.local/share/uv"
+    fi
+fi
+
+# Display server configuration
+DISPLAY_BINDS=""
+# Wayland
+DISPLAY_BINDS="--ro-bind $XDG_RUNTIME_DIR/$WAYLAND_DISPLAY $XDG_RUNTIME_DIR/$WAYLAND_DISPLAY"
+if [ -e "$XDG_RUNTIME_DIR/bus" ]; then
+  DISPLAY_BINDS="$DISPLAY_BINDS --bind $XDG_RUNTIME_DIR/bus $XDG_RUNTIME_DIR/bus"
+fi
+
+# Add DRI access permissions
+GPU_BINDS=""
+for dev in /dev/dri/renderD* /dev/dri/card*; do
+  if [ -e "$dev" ]; then
+    echo "Binding DRI device: $dev"
+    GPU_BINDS="$GPU_BINDS --dev-bind $dev $dev"
+  fi
+done
+
+# Launch sandbox
+echo "Launching sandboxed WezTerm..."
+
+# Execute bwrap without variable expansion in the command string
+# note that the order of binds is important
+bwrap --unshare-user-try --unshare-pid --unshare-uts --unshare-cgroup \
+      --ro-bind /usr /usr \
+      --ro-bind /bin /bin \
+      --ro-bind /lib /lib \
+      --ro-bind /lib64 /lib64 \
+      --ro-bind /usr/share/fonts /usr/share/fonts \
+      --ro-bind /etc/ssl /etc/ssl \
+      --ro-bind /etc/fonts /etc/fonts \
+      --ro-bind /etc/resolv.conf /etc/resolv.conf \
+      --ro-bind /etc/hosts /etc/hosts \
+      --ro-bind /etc/hostname /etc/hostname \
+      --share-net \
+      --dev /dev \
+      $GPU_BINDS \
+      --bind "$WEZTERM_TEMP" /tmp \
+      $DISPLAY_BINDS \
+      --proc /proc \
+      --bind "$SANDBOX_HOME" "/home/$USERNAME" \
+      --bind "$HOME/.julia" "/home/$USERNAME/.julia" \
+      --bind "$HOME/.juliaup" "/home/$USERNAME/.juliaup" \
+      --bind "$HOME/.cache/Tectonic" "/home/$USERNAME/.cache/Tectonic" \
+      $TOOL_BINDS \
+      --bind "$PROJECT_ROOT" "$PROJECT_ROOT" \
+      --setenv HOME "/home/$USERNAME" \
+      --setenv WAYLAND_DISPLAY "$WAYLAND_DISPLAY" \
+      --setenv XDG_RUNTIME_DIR "$XDG_RUNTIME_DIR" \
+      --setenv DBUS_SESSION_BUS_ADDRESS "unix:path=$XDG_RUNTIME_DIR/bus" \
+      --setenv PATH "/usr/local/bin:/usr/bin:/bin:/home/$USERNAME/.local/bin:/home/$USERNAME/.juliaup/bin:/home/$USERNAME/bin" \
+      --setenv OPENAI_API_KEY "$OPENAI_API_KEY" \
+      --setenv OPENAI_API_BASE "$OPENAI_API_BASE" \
+      --setenv ANTHROPIC_API_KEY "$ANTHROPIC_API_KEY" \
+      --setenv TMPDIR "/tmp" \
+      /usr/bin/wezterm start --cwd "$PROJECT_ROOT"
+
+# Capture the exit code
+BWRAP_EXIT=$?
+echo "bwrap exited with code: $BWRAP_EXIT"
+
+# Clean up
+read -p "Delete temporary folders $SANDBOX_HOME and $WEZTERM_TEMP? (y/N)" -n 1 -r
+echo    # move to a new line
+if [[ $REPLY =~ ^[Yy]$ ]]
+then
+   rm -rf "$SANDBOX_HOME"
+   rm -rf "$WEZTERM_TEMP"
+fi
