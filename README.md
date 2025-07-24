@@ -4,7 +4,7 @@ A secure, isolated development environment using Linux containers for safe AI-as
 
 ## Overview
 
-Sandkasten creates a sandboxed development environment with Julia, Helix editor, LaTex with Tectonic, and aider AI coder, running inside a WezTerm terminal session. It uses `bwrap` (bubblewrap) to provide containerized isolation while maintaining access to your project files and development tools.
+Sandkasten creates a sandboxed development environment with Julia, Helix editor, LaTeX with Tectonic, and aider AI coder, running inside a WezTerm terminal session. It uses `bwrap` (bubblewrap) to provide containerized isolation while maintaining access to your project files and development tools.
 
 ## Features
 
@@ -34,7 +34,7 @@ sandkasten --no-julia
 ```
 
 ### Options
-- `--no-julia`: disable Julia support (avoids copies of ~/.julia, ~/.juliaup)
+- `--no-julia`: disable Julia support (avoids copying ~/.julia, ~/.juliaup)
 - `project_directory`: Project directory to work in (default: current directory)
 
 ## Requirements
@@ -64,18 +64,18 @@ chmod +x sandkasten
 
 3. Optionally, add to your PATH or create a symlink.
 
-4. BTRFS setup, if using BTRFS:
+4. BTRFS setup (if using BTRFS):
 
-- make `~./julia` a subvolume
+- make `~/.julia` a subvolume
 - use the `user_subvol_rm_allowed` mount option
 
 ## How It Works
 
 1. **Sandbox Creation**: Creates isolated environment in `~/.cache/sandkasten/YYYY-MM-DD_XXXXXXXX`
-   - however the project directory gets read-write mounted in its normal place in the filesystem
-   - everything else in the home directory (apart frome some dev-tools) is not accessible
+   - Project directory gets read-write mounted in its normal filesystem location
+   - Everything else in the home directory (apart from some dev-tools) is not accessible
 2. **Configuration Copying**: Copies essential config files (Fish, WezTerm, Helix, Git)
-3. **Julia Environment** (if enabled): Creates copy-on-write copies of Julia depot and related directories
+3. **Julia Environment** (if enabled): Creates copy-on-write snapshots of Julia depot and related directories
 4. **Container Launch**: Uses `bwrap` to create isolated namespace with restricted system access
 5. **Development Session**: Launches WezTerm with custom environment and project access
 6. **Cleanup**: Optionally removes temporary files after session ends
@@ -105,7 +105,7 @@ chmod +x sandkasten
 ⚠️ **Important**: This sandbox provides protection against **accidental damage** but has significant limitations against **malicious intent**.
 
 ### Known Security Issues
-Really 1,2 & 3 are needed to actually work with the project and allow AI interaction (unless you run a local AI). Point 4 is partially mitigated. Point 5 assumes that there is nothing too personal in those files.
+Points 1-3 are required for project work and AI interaction (unless using local AI). Point 4 is partially mitigated. Point 5 assumes configuration files contain no sensitive data.
 
 1. **Network Access**: Full network connectivity allows:
    - Data exfiltration of project files
@@ -142,7 +142,7 @@ Really 1,2 & 3 are needed to actually work with the project and allow AI interac
 ### Common Issues
 
 **Slow startup with Julia**:
-- use btrfs subvolume for .julia
+- Use BTRFS subvolume for ~/.julia
 
 **Permission errors**:
 - Ensure `bwrap` is installed and accessible
