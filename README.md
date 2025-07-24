@@ -119,6 +119,7 @@ chmod +x sandkasten
 ⚠️ **Important**: This sandbox provides protection against **accidental damage** but has significant limitations against **malicious intent**.
 
 ### Known Security Issues
+Really 1,2 & 3 are needed to actually work with the project and allow AI interaction (unless you run a local AI). Point 4 is partially mitigated. Point 5 assumes that there is nothing too personal in those files.
 
 1. **Network Access**: Full network connectivity allows:
    - Data exfiltration of project files
