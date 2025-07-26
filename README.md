@@ -1,19 +1,14 @@
 # Sandkasten
 
-A secure, isolated development environment using Linux containers for safe AI-assisted coding.
+A mostly secure, isolated development environment for safe AI-assisted coding. It uses [Bubblewarp](https://github.com/containers/bubblewrap), a lightweight Linux container also used, e.g., by Flatpak. The idea is to have this as frictionless as possible whilst giving a decent level of protection, likely good enough to guard against accidental AI-havok but not good enough to protect against a malicious actor.
 
-## Overview
+Sandkasten creates a sandboxed development environment running inside a WezTerm terminal session with access to Julia, Helix editor, LaTeX with Tectonic, graphics in wayland, and aider AI coder. It uses `bwrap` (bubblewrap) to provide containerized isolation while maintaining access to your project files and development tools.
 
-Sandkasten creates a sandboxed development environment with Julia, Helix editor, LaTeX with Tectonic, and aider AI coder, running inside a WezTerm terminal session. It uses `bwrap` (bubblewrap) to provide containerized isolation while maintaining access to your project files and development tools.
-
-## Features
-
-- **Secure Isolation**: Uses Linux namespaces and restricted filesystem access
-- **Development Tools**: Pre-configured Julia, Helix editor, and aider AI assistant
-- **GPU Access**: Hardware-accelerated graphics for Julia plotting
-- **Copy-on-Write**: Efficient file copying using BTRFS reflinks when available
-- **Project Integration**: Mounts your project directory for seamless development
-- **Custom Environment**: Sandbox-specific shell prompt and configuration
+Running
+```
+$ sandkasten
+```
+will spawn a new WezTerm window which is sandboxed (including all its tabs and programs spwned by it) with read-write access to the current folder (but not parent folders). From there other sandboxed programs can be started, including graphical ones, such as a web browser.
 
 ## Usage
 
@@ -32,21 +27,16 @@ sandkasten /path/to/project
 # Disable Julia
 sandkasten --no-julia
 ```
+disable Julia support (avoids copying ~/.julia, ~/.juliaup)
 
-### Options
-- `--no-julia`: disable Julia support (avoids copying ~/.julia, ~/.juliaup)
-- `project_directory`: Project directory to work in (default: current directory)
+## Installation
 
-## Requirements
-
+Requirements:
 - Linux system with bubblewrap (`bwrap`) installed
 - WezTerm terminal emulator
 - Fish shell
-- Helix editor
-- Optional: Julia, Tectonic, aider AI coder or other agentic AI assistant
-- BTRFS filesystem (recommended for efficient copying)
-
-## Installation
+- Optional: Julia, Helix, Tectonic, aider AI coder or other agentic AI assistant
+- BTRFS filesystem (recommended for efficient copying of a large Julia install)
 
 1. Install dependencies:
 ```bash
@@ -71,9 +61,10 @@ chmod +x sandkasten
 
 ## How It Works
 
-1. **Sandbox Creation**: Creates isolated environment in `~/.cache/sandkasten/YYYY-MM-DD_XXXXXXXX`
+1. **Sandbox Creation**: Creates isolated environment in `~/.cache/sandkasten/YYYY-MM-DD_XXXXXXXX` which is the home directory of the sandbox
    - Project directory gets read-write mounted in its normal filesystem location
-   - Everything else in the home directory (apart from some dev-tools) is not accessible
+   - Everything else in the home directory is not accessible
+   - Some dev-tools settings and binaries are copied from the host to the sandbox:
 2. **Configuration Copying**: Copies essential config files (Fish, WezTerm, Helix, Git)
 3. **Julia Environment** (if enabled): Creates copy-on-write snapshots of Julia depot and related directories
 4. **Container Launch**: Uses `bwrap` to create isolated namespace with restricted system access
@@ -128,33 +119,6 @@ Points 1-3 are required for project work and AI interaction (unless using local 
 5. **Configuration Leakage**:
    - Git configuration and other sensitive configs are copied
    - Could expose personal information or credentials
-
-### Recommended Additional Precautions
-
-- **Backup Projects**: Always backup before AI-assisted sessions
-- **Review Changes**: Carefully review all AI-generated modifications
-- **Limit Sensitive Projects**: Avoid using with projects containing secrets
-- **Monitor Network**: Consider using network monitoring tools
-- **Regular Cleanup**: Remove old sandbox directories periodically
-
-## Troubleshooting
-
-### Common Issues
-
-**Slow startup with Julia**:
-- Use BTRFS subvolume for ~/.julia
-
-**Permission errors**:
-- Ensure `bwrap` is installed and accessible
-- Check that project directory is readable
-
-**Graphics issues**:
-- Verify GPU drivers are installed
-- Check `/dev/dri` device permissions
-
-**Missing tools**:
-- Install required dependencies (WezTerm, Fish, Helix)
-- Verify tools are in PATH
 
 ### Cleanup
 
