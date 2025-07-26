@@ -1,14 +1,16 @@
 # Sandkasten
 
-A mostly secure, isolated development environment for safe AI-assisted coding. It uses [Bubblewarp](https://github.com/containers/bubblewrap), a lightweight Linux container also used, e.g., by Flatpak. The idea is to have this as frictionless as possible whilst giving a decent level of protection, likely good enough to guard against accidental AI-havok but not good enough to protect against a malicious actor.
+A mostly secure, isolated development environment for safe AI-assisted coding. It uses [Bubblewarp](https://github.com/containers/bubblewrap), a lightweight Linux container also used by, e.g., Flatpak. The idea is to have this as frictionless as possible whilst giving a decent level of protection, likely good enough to guard against accidental AI-havok but not good enough to protect against a malicious actor.
 
-Sandkasten creates a sandboxed development environment running inside a WezTerm terminal session with access to Julia, Helix editor, LaTeX with Tectonic, graphics in wayland, and aider AI coder. It uses `bwrap` (bubblewrap) to provide containerized isolation while maintaining access to your project files and development tools.
 
 Running
 ```
 $ sandkasten
 ```
-will spawn a new WezTerm window which is sandboxed (including all its tabs and programs spwned by it) with read-write access to the current folder (but not parent folders). From there other sandboxed programs can be started, including graphical ones, such as a web browser.
+will spawn a new WezTerm window which is sandboxed (including all its tabs and programs spawned by it) with read-write access to the current folder (but not parent folders). From there other sandboxed programs can be started, including graphical ones, such as a web browser.
+
+#### Health warning
+The setup is geared towards my use cases, namely, Julia coding and LaTeX writing using [Aider](https://aider.chat/) as AI command line agent. However as the bash script is pretty simple it could easily be adjusted. Albeit, there are many other options around which may well be more plug-and-play, see below for links to a few of them.
 
 ## Usage
 
@@ -127,3 +129,14 @@ Points 1-3 are required for project work and AI interaction (unless using local 
    - Git configuration and other sensitive configs are copied
    - Could expose personal information or credentials
 
+## Similar projects
+
+There are a ton of similar projects out there... a few:
+
+- https://github.com/bigattichouse/scratchpad 
+- https://docs.anthropic.com/en/docs/claude-code/devcontainer
+- https://github.com/nikvdp/cco
+- https://github.com/nikvdp/cco
+- https://github.com/RchGrav/claudebox
+
+Well, there are many like it, but this one is mine. 
