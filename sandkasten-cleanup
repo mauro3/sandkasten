@@ -34,6 +34,14 @@ cleanup_sandbox_dir() {
         fi
     done
     
+    # Clean up corresponding temp directory
+    local sandbox_basename=$(basename "$sandbox_dir")
+    local temp_dir="/tmp/sandkasten.tmp.$sandbox_basename"
+    if [ -d "$temp_dir" ]; then
+        echo "  Removing temp directory: $temp_dir"
+        rm -rf "$temp_dir"
+    fi
+    
     # Remove the entire directory
     echo "  Removing directory: $sandbox_dir"
     rm -rf "$sandbox_dir"

@@ -42,15 +42,15 @@ mkdir -p "$PROJECT_ROOT"
 # Create sandbox directory in cache with date and random string
 CACHE_DIR="$HOME/.cache/sandkasten"
 mkdir -p "$CACHE_DIR"
-RANDOM_SUFFIX=$(openssl rand -hex 4)  # 8-character hex string
+RANDOM_SUFFIX=$(openssl rand -hex 8)  # 8-character hex string
 SANDBOX_HOME="$CACHE_DIR/$(date +%Y-%m-%d)_$RANDOM_SUFFIX"
 mkdir -p "$SANDBOX_HOME"
 echo "Sandbox home: $SANDBOX_HOME"
 
 # Create a temp directory (i.e. /tmp) that will persist during the sandbox session
-WEZTERM_TEMP=$(mktemp -d sandkasten.tmp.XXXXXXXX)
-echo "WezTerm temp: $WEZTERM_TEMP"
-
+SANDBOX_TEMP="/tmp/sandkasten.tmp.$(date +%Y-%m-%d)_$RANDOM_SUFFIX"
+mkdir -p "$SANDBOX_TEMP"
+echo "Temp-dir: $SANDBOX_TEMP"
 
 # Set up minimal configuration directories
 mkdir -p "$SANDBOX_HOME/.config/fish"
@@ -284,7 +284,7 @@ bwrap --unshare-user-try --unshare-pid --unshare-uts --unshare-cgroup \
       --tmpfs /dev/vboxusb \
       --tmpfs /dev/vfio \
       $GPU_BINDS \
-      --bind "$WEZTERM_TEMP" /tmp \
+      --bind "$SANDBOX_TEMP" /tmp \
       $DISPLAY_BINDS \
       --proc /proc \
       --bind "$SANDBOX_HOME" "/home/$USERNAME" \
@@ -308,7 +308,7 @@ BWRAP_EXIT=$?
 echo "bwrap exited with code: $BWRAP_EXIT"
 
 # Clean up
-read -p "Delete sandbox directory $SANDBOX_HOME and temp $WEZTERM_TEMP? (y/N)" -n 1 -r
+read -p "Delete sandbox directory $SANDBOX_HOME and temp $SANDBOX_TEMP? (y/N)" -n 1 -r
 echo    # move to a new line
 if [[ $REPLY =~ ^[Yy]$ ]]; then
    # Try to delete BTRFS subvolumes first for faster cleanup
@@ -323,5 +323,5 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
    
    # Remove the entire sandbox directory (handles any remaining files/dirs)
    rm -rf "$SANDBOX_HOME"
-   rm -rf "$WEZTERM_TEMP"
+   rm -rf "$SANDBOX_TEMP"
 fi
