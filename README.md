@@ -29,6 +29,13 @@ sandkasten --no-julia
 ```
 disable Julia support (avoids copying ~/.julia, ~/.juliaup)
 
+### Cleanup
+
+Remove old sandbox directories by running:
+```bash
+sandkasten-cleanup
+```
+
 ## Installation
 
 Requirements:
@@ -120,9 +127,3 @@ Points 1-3 are required for project work and AI interaction (unless using local 
    - Git configuration and other sensitive configs are copied
    - Could expose personal information or credentials
 
-### Cleanup
-
-Remove old sandbox directories by running:
-```bash
-sandkasten-cleanup
-```

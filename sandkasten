@@ -47,6 +47,11 @@ SANDBOX_HOME="$CACHE_DIR/$(date +%Y-%m-%d)_$RANDOM_SUFFIX"
 mkdir -p "$SANDBOX_HOME"
 echo "Sandbox home: $SANDBOX_HOME"
 
+# Create a temp directory (i.e. /tmp) that will persist during the sandbox session
+WEZTERM_TEMP=$(mktemp -d sandkasten.tmp.XXXXXXXX)
+echo "WezTerm temp: $WEZTERM_TEMP"
+
+
 # Set up minimal configuration directories
 mkdir -p "$SANDBOX_HOME/.config/fish"
 mkdir -p "$SANDBOX_HOME/.config/wezterm"
@@ -170,10 +175,6 @@ cd "$PROJECT_ROOT" || echo "Failed to change to project directory: \$?"
 exec fish
 EOF
 chmod +x "$SANDBOX_HOME/terminal.sh"
-
-# Create a temp directory (i.e. /tmp) that will persist during the sandbox session
-WEZTERM_TEMP=$(mktemp -d)
-echo "WezTerm temp: $WEZTERM_TEMP"
 
 # Get user name
 USERNAME=$(whoami)
