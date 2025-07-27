@@ -1,7 +1,6 @@
 # Sandkasten
 
-A mostly secure, isolated development environment for safe AI-assisted coding. It uses [Bubblewarp](https://github.com/containers/bubblewrap), a lightweight Linux container also used by, e.g., Flatpak. The idea is to have this as frictionless as possible whilst giving a decent level of protection, likely good enough to guard against accidental AI-havok but not good enough to protect against a malicious actor.
-
+A sandboxed and mostly secure development environment for safe AI-assisted coding. It uses [Bubblewarp](https://github.com/containers/bubblewrap), a lightweight Linux container also used by, e.g., Flatpak. The idea is to have `sandkasten` to be as frictionless as possible to use whilst giving a decent level of protection: likely good enough to guard against accidental AI-havok but not good enough to protect against a malicious actor.
 
 Running
 ```
@@ -10,7 +9,7 @@ $ sandkasten
 will spawn a new WezTerm window which is sandboxed (including all its tabs and programs spawned by it) with read-write access to the current folder (but not parent folders). From there other sandboxed programs can be started, including graphical ones, such as a web browser.
 
 #### Health warning
-The setup is geared towards my use cases, namely, Julia coding and LaTeX writing using [Aider](https://aider.chat/) as AI command line agent. However as the bash script is pretty simple it could easily be adjusted. Albeit, there are many other options around which may well be more plug-and-play, see below for links to a few of them.
+The setup is geared towards my use cases, namely, Julia coding and LaTeX writing using [Aider](https://aider.chat/) as AI command line agent (all those config files, binaries, etc are copied). However as the `sandkasten` bash script is pretty simple it could easily be adjusted. Albeit, there are many other options around which may wellcomplicatedug-and-play (but may well be a lot more compilcated too), see below for links to a few of them.
 
 ## Usage
 
@@ -66,7 +65,7 @@ chmod +x sandkasten
 4. BTRFS setup (if using BTRFS):
 
 - make `~/.julia` a subvolume
-- use the `user_subvol_rm_allowed` mount option
+- use the `user_subvol_rm_allowed` mount option on the parent btrfs mount to apermissions without root persmissions
 
 ## How It Works
 
@@ -74,11 +73,11 @@ chmod +x sandkasten
    - Project directory gets read-write mounted in its normal filesystem location
    - Everything else in the home directory is not accessible
    - Some dev-tools settings and binaries are copied from the host to the sandbox:
-2. **Configuration Copying**: Copies essential config files (Fish, WezTerm, Helix, Git)
-3. **Julia Environment** (if enabled): Creates copy-on-write snapshots of Julia depot and related directories
-4. **Container Launch**: Uses `bwrap` to create isolated namespace with restricted system access
-5. **Development Session**: Launches WezTerm with custom environment and project access
-6. **Cleanup**: Optionally removes temporary files after session ends
+     - **Configuration Copying**: Copies essential config files and binaries (Fish, WezTerm, Helix, Git)
+     - **Julia Environment** (if enabled): Creates copy-on-write snapshots of Julia depot and related directories (`~/.julia` and `~/.juliaup`). Note that I symlink the folders with configurations, namely, `~/.julia/dev`, `config` and `environments` from elsewhere and thus I copy those over.
+2. **Container Launch**: Uses `bwrap` to create isolated namespace with restricted system access
+3. **Development Session**: Launches WezTerm with custom environment and project access
+4. **Cleanup**: Optionally removes temporary files after session ends, alternatively use `sandkasten-cleanup` script
 
 ## Security Model
 
@@ -100,12 +99,10 @@ chmod +x sandkasten
 - **GPU/Hardware**: Direct access to graphics hardware
 - **API Keys**: Environment variables are passed through
 
-## Security Considerations
-
 ⚠️ **Important**: This sandbox provides protection against **accidental damage** but has significant limitations against **malicious intent**.
 
 ### Known Security Issues
-Points 1-3 are required for project work and AI interaction (unless using local AI). Point 4 is partially mitigated. Point 5 assumes configuration files contain no sensitive data.
+Below points 1-3 are required for project work and AI interaction (unless using local AI). Point 4 is partially mitigated. Point 5 assumes configuration files contain no sensitive data.
 
 1. **Network Access**: Full network connectivity allows:
    - Data exfiltration of project files
@@ -139,4 +136,4 @@ There are a ton of similar projects out there... a few:
 - https://github.com/nikvdp/cco
 - https://github.com/RchGrav/claudebox
 
-Well, there are many like it, but this one is mine. 
+There are many like it, but this one is mine. 
