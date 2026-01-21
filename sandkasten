@@ -5,6 +5,106 @@
 # - Helix editor
 # - opencode AI-agentic coder
 
+# === HELPER FUNCTIONS ===
+
+# Get user name
+USERNAME=$(whoami)
+
+create_cow_snapshot() {
+    local SOURCE_DIR="$1"
+    local DEST_DIR="$2"
+    
+    if [ -d "$SOURCE_DIR" ]; then
+        echo "Creating snapshot: $SOURCE_DIR" >&2
+        if btrfs -q subvolume snapshot "$SOURCE_DIR" "$DEST_DIR" 2>/dev/null; then
+            echo "BTRFS snapshot created successfully" >&2
+        else
+            echo "BTRFS snapshot failed, copying with COW if available..." >&2
+            cp -r "$SOURCE_DIR" "$DEST_DIR"
+        fi
+    else
+        mkdir -p "$DEST_DIR"
+    fi
+    
+    # Echo the snapshot path
+    echo "$DEST_DIR"
+}
+
+setup_sandbox_directories() {
+    local SANDBOX_HOME="$1"
+    
+    # Configuration directories
+    mkdir -p "$SANDBOX_HOME/.config/fish"
+    mkdir -p "$SANDBOX_HOME/.config/wezterm"
+    mkdir -p "$SANDBOX_HOME/.config/helix"
+    mkdir -p "$SANDBOX_HOME/.config/zathura"
+    mkdir -p "$SANDBOX_HOME/.config/opencode"
+    mkdir -p "$SANDBOX_HOME/.config/git"
+    
+    # Local directories
+    mkdir -p "$SANDBOX_HOME/.local/share/fish"
+    mkdir -p "$SANDBOX_HOME/.local/share/opencode"
+    mkdir -p "$SANDBOX_HOME/.local/bin"
+    mkdir -p "$SANDBOX_HOME/.cargo/bin"
+    
+    # Other directories
+    mkdir -p "$SANDBOX_HOME/julia"
+}
+
+copy_sandbox_configs() {
+    local SANDBOX_HOME="$1"
+    
+    # OpenCode authentication
+    [ -f "$HOME/.local/share/opencode/auth.json" ] && \
+        cp "$HOME/.local/share/opencode/auth.json" "$SANDBOX_HOME/.local/share/opencode/auth.json"
+    
+    # Shell configuration
+    [ -f "$HOME/.config/fish/config.fish" ] && \
+        cp "$HOME/.config/fish/config.fish" "$SANDBOX_HOME/.config/fish/"
+    
+    # Terminal and editor configs
+    [ -f "$HOME/.config/wezterm/wezterm.lua" ] && \
+        cp "$HOME/.config/wezterm/wezterm.lua" "$SANDBOX_HOME/.config/wezterm/"
+    [ -f "$HOME/.config/helix/config.toml" ] && \
+        cp "$HOME/.config/helix/config.toml" "$SANDBOX_HOME/.config/helix/"
+    [ -f "$HOME/.config/helix/languages.toml" ] && \
+        cp "$HOME/.config/helix/languages.toml" "$SANDBOX_HOME/.config/helix/"
+    [ -f "$HOME/.config/zathura/zathurarc" ] && \
+        cp "$HOME/.config/zathura/zathurarc" "$SANDBOX_HOME/.config/zathura/"
+    
+    # Directories
+    [ -d "$HOME/.config/vale" ] && \
+        cp -r "$HOME/.config/vale" "$SANDBOX_HOME/.config"
+    [ -d "$HOME/.config/opencode" ] && \
+        cp -r "$HOME/.config/opencode" "$SANDBOX_HOME/.config"
+    [ -d "$HOME/.config/git" ] && \
+        cp -r "$HOME/.config/git" "$SANDBOX_HOME/.config"
+    
+    # Git configuration
+    [ -f "$HOME/.gitignore.global" ] && \
+        cp "$HOME/.gitignore.global" "$SANDBOX_HOME"
+    
+    # Julia configuration
+    [ -d "$HOME/julia/dot-julia-config" ] && \
+        cp -r "$HOME/julia/dot-julia-config" "$SANDBOX_HOME/julia/"
+    [ -d "$HOME/julia/dot-julia-environments" ] && \
+        cp -r "$HOME/julia/dot-julia-environments" "$SANDBOX_HOME/julia/"
+    
+    # Scripts and binaries
+    [ -f "$HOME/.local/bin/juliap" ] && \
+        cp "$HOME/.local/bin/juliap" "$SANDBOX_HOME/bin/"
+    [ -f "$HOME/.local/bin/meld" ] && \
+        cp "$HOME/.local/bin/meld" "$SANDBOX_HOME/bin/"
+    [ -f "$HOME/.local/bin/helix-repl-start.sh" ] && \
+        cp "$HOME/.local/bin/helix-repl-start.sh" "$SANDBOX_HOME/.local/bin/"
+    [ -f "$HOME/.local/bin/vale-ls" ] && \
+        cp "$HOME/.local/bin/vale-ls" "$SANDBOX_HOME/.local/bin/"
+    [ -f "$HOME/.cargo/bin/simple-completion-language-server" ] && \
+        cp "$HOME/.cargo/bin/simple-completion-language-server" "$SANDBOX_HOME/.cargo/bin/"
+}
+
+# === MAIN SCRIPT ===
+
 # Parse arguments
 WITH_JULIA=true
 PROJECT_ROOT=""
@@ -53,91 +153,27 @@ mkdir -p "$SANDBOX_TEMP"
 echo "Temp-dir: $SANDBOX_TEMP"
 
 # Set up minimal configuration directories
-mkdir -p "$SANDBOX_HOME/.config/fish"
-mkdir -p "$SANDBOX_HOME/.config/wezterm"
-mkdir -p "$SANDBOX_HOME/.config/helix"
-mkdir -p "$SANDBOX_HOME/.config/zathura"
-mkdir -p "$SANDBOX_HOME/.config/opencode"
-mkdir -p "$SANDBOX_HOME/.config/git"
-mkdir -p "$SANDBOX_HOME/.local/share/fish"
-mkdir -p "$SANDBOX_HOME/.local/share/opencode"
-mkdir -p "$SANDBOX_HOME/.cargo/bin"
-mkdir -p "$SANDBOX_HOME/.local/bin"
-mkdir -p "$SANDBOX_HOME/julia"
+setup_sandbox_directories "$SANDBOX_HOME"
 
 # Copy essential configuration files
-[ -f "$HOME/.local/share/opencode/auth.json" ] && cp "$HOME/.local/share/opencode/auth.json" "$SANDBOX_HOME/.local/share/opencode/auth.json"
-[ -f "$HOME/.config/fish/config.fish" ] && cp "$HOME/.config/fish/config.fish" "$SANDBOX_HOME/.config/fish/"
-[ -f "$HOME/.config/wezterm/wezterm.lua" ] && cp "$HOME/.config/wezterm/wezterm.lua" "$SANDBOX_HOME/.config/wezterm/"
-[ -f "$HOME/.config/helix/config.toml" ] && cp "$HOME/.config/helix/config.toml" "$SANDBOX_HOME/.config/helix/"
-[ -f "$HOME/.config/helix/languages.toml" ] && cp "$HOME/.config/helix/languages.toml" "$SANDBOX_HOME/.config/helix/"
-[ -f "$HOME/.config/zathura/zathurarc" ] && cp "$HOME/.config/zathura/zathurarc" "$SANDBOX_HOME/.config/zathura/"
-[ -d "$HOME/.config/vale" ] && cp -r "$HOME/.config/vale" "$SANDBOX_HOME/.config"
-[ -d "$HOME/.config/opencode" ] && cp -r "$HOME/.config/opencode" "$SANDBOX_HOME/.config"
-[ -f "$HOME/.gitignore.global" ] && cp "$HOME/.gitignore.global" "$SANDBOX_HOME"
-[ -d "$HOME/.config/git" ] && cp -r "$HOME/.config/git" "$SANDBOX_HOME/.config"
-[ -d "$HOME/julia/dot-julia-config" ] && cp -r "$HOME/julia/dot-julia-config" "$SANDBOX_HOME/julia/"
-[ -d "$HOME/julia/dot-julia-environments" ] && cp -r "$HOME/julia/dot-julia-environments" "$SANDBOX_HOME/julia/"
-# [ -d "$HOME/julia/dot-julia-dev" ] && cp -r "$HOME/julia/dot-julia-dev" "$SANDBOX_HOME/julia/"
-# copy configuration folders
-# [ -d "$HOME/.config/meld" ] && cp -r "$HOME/.config/meld" "$SANDBOX_HOME/.config/"
-# copy needed shell scripts
-[ -f "$HOME/.local/bin/juliap" ] && cp "$HOME/.local/bin/juliap" "$SANDBOX_HOME/bin/"
-[ -f "$HOME/.local/bin/juliap" ] && cp "$HOME/.local/bin/meld" "$SANDBOX_HOME/bin/"
-[ -f "$HOME/.local/bin/helix-repl-start.sh" ] && cp "$HOME/.local/bin/helix-repl-start.sh" "$SANDBOX_HOME/.local/bin/"
-[ -f "$HOME/.local/bin/vale-ls" ] && cp "$HOME/.local/bin/vale-ls" "$SANDBOX_HOME/.local/bin/"
-[ -f "$HOME/.cargo/bin/simple-completion-language-server" ] && cp "$HOME/.cargo/bin/simple-completion-language-server" "$SANDBOX_HOME/.cargo/bin/simple-completion-language-server"
+copy_sandbox_configs "$SANDBOX_HOME"
 
-# Larger directories are copyed on write (COW), if possible
+# Larger directories are copied on write (COW), if possible
 COW_BINDS=""
+
 # Julia-related directories (only if requested)
 if [ "$WITH_JULIA" = true ]; then
-    # Create Julia depot snapshot/copy
-    JULIA_DEPOT_SANDBOX="$SANDBOX_HOME/.julia"
-    if [ -d "$HOME/.julia" ]; then
-        echo "Creating Julia depot snapshot..."
-        if btrfs subvolume snapshot "$HOME/.julia" "$JULIA_DEPOT_SANDBOX" 2>/dev/null; then
-            echo "BTRFS snapshot created successfully"
-        else
-            echo "BTRFS snapshot failed, copying with COW if available..."
-            cp -r "$HOME/.julia" "$JULIA_DEPOT_SANDBOX"
-        fi
-    else
-        mkdir -p "$JULIA_DEPOT_SANDBOX"
-    fi
-
-
-    # Create Juliaup directory snapshot/copy
-    JULIAUP_SANDBOX="$SANDBOX_HOME/.juliaup"
-    if [ -d "$HOME/.juliaup" ]; then
-        echo "Creating .juliaup snapshot..."
-        if btrfs subvolume snapshot "$HOME/.juliaup" "$JULIAUP_SANDBOX" 2>/dev/null; then
-            echo "BTRFS snapshot created successfully"
-        else
-            echo "BTRFS snapshot failed, copying with COW if available..."
-            cp -r "$HOME/.juliaup" "$JULIAUP_SANDBOX"
-        fi
-    else
-        mkdir -p "$JULIAUP_SANDBOX"
-    fi
-    COW_BINDS="--bind $JULIA_DEPOT_SANDBOX /home/$USERNAME/.julia --bind $JULIAUP_SANDBOX /home/$USERNAME/.juliaup"
+    JULIA_DEPOT_SANDBOX=$(create_cow_snapshot "$HOME/.julia" "$SANDBOX_HOME/.julia")
+    COW_BINDS="$COW_BINDS --bind $JULIA_DEPOT_SANDBOX /home/$USERNAME/.julia"
+    
+    JULIAUP_SANDBOX=$(create_cow_snapshot "$HOME/.juliaup" "$SANDBOX_HOME/.juliaup")
+    COW_BINDS="$COW_BINDS --bind $JULIAUP_SANDBOX /home/$USERNAME/.juliaup"
 fi
-# Create Tectonic cache directory snapshot/copy
-TECTONIC_CACHE_SANDBOX="$SANDBOX_HOME/.cache/Tectonic"
-if [ -d "$HOME/.cache/Tectonic" ]; then
-    echo "Creating Tectonic cache snapshot..."
-    mkdir -p "$SANDBOX_HOME/.cache"
-    if btrfs subvolume snapshot "$HOME/.cache/Tectonic" "$TECTONIC_CACHE_SANDBOX" 2>/dev/null; then
-        echo "BTRFS snapshot created successfully"
-    else
-        echo "BTRFS snapshot failed, copying with COW if available..."
-        cp -r "$HOME/.cache/Tectonic" "$TECTONIC_CACHE_SANDBOX"
-    fi
-else
-    mkdir -p "$TECTONIC_CACHE_SANDBOX"
-fi
+
+# Tectonic cache
+mkdir -p "$SANDBOX_HOME/.cache"
+TECTONIC_CACHE_SANDBOX=$(create_cow_snapshot "$HOME/.cache/Tectonic" "$SANDBOX_HOME/.cache/Tectonic")
 COW_BINDS="$COW_BINDS --bind $TECTONIC_CACHE_SANDBOX /home/$USERNAME/.cache/Tectonic"
-
 
 
 # Patch wezterm.lua to uncomment sandbox-specific settings
@@ -181,9 +217,6 @@ exec fish
 EOF
 chmod +x "$SANDBOX_HOME/terminal.sh"
 
-# Get user name
-USERNAME=$(whoami)
-
 # Display server configuration
 DISPLAY_BINDS=""
 # Wayland
@@ -217,7 +250,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Add DRI access permissions
+# Add DRI access permissions for GPU
 GPU_BINDS=""
 for dev in /dev/dri/renderD* /dev/dri/card*; do
   if [ -e "$dev" ]; then
@@ -229,32 +262,37 @@ done
 # Launch sandbox
 echo "Launching sandboxed WezTerm..."
 
-# Execute bwrap without variable expansion in the command string
-# note that the order of binds is important
-#
-# To debug if something failes because of missing dev-access,
-# run strace and look for failed /dev access:
-# strace -f -e trace=openat,newfstatat ./sandkasten 2>&1 | grep -E "/dev.*ENOENT"
-# 
-# Alternaltivly just comment out all --tmpfls /dev/... lines
-bwrap --unshare-user-try --unshare-pid --unshare-uts --unshare-cgroup \
+# Device access strategy: blacklist approach
+# We use --dev to get proper devtmpfs with all infrastructure (symlinks, PTY support, etc.),
+# then use --tmpfs to hide unwanted device categories. See create_cow_snapshot comment for details.
+# To debug missing device access: strace -f -e trace=openat ./sandkasten 2>&1 | grep -E "/dev.*ENOENT"
+bwrap --unshare-user-try \
+      --unshare-pid \
+      --unshare-uts \
+      --unshare-cgroup \
+      `# === Read-only system bindings ===` \
       --ro-bind /usr /usr \
       --ro-bind /bin /bin \
       --ro-bind /lib /lib \
       --ro-bind /lib64 /lib64 \
       --ro-bind /usr/libexec /usr/libexec \
+      `# === System resources ===` \
       --ro-bind /usr/share/zoneinfo /usr/share/zoneinfo \
       --ro-bind /usr/share/fonts /usr/share/fonts \
+      `# === Certificates and network config ===` \
       --ro-bind /etc/ssl /etc/ssl \
       --ro-bind /etc/pki /etc/pki \
       --ro-bind /etc/fonts /etc/fonts \
       --ro-bind /etc/resolv.conf /etc/resolv.conf \
       --ro-bind /etc/hosts /etc/hosts \
       --ro-bind /etc/hostname /etc/hostname \
+      `# === External tools ===` \
       --ro-bind /home/linuxbrew  /home/linuxbrew \
-      --ro-bind /var/lib/flatpak  /var/lib/flatpak \
       --share-net \
+      `# === Device access (blacklist approach) ===` \
+      `# Use --dev for proper devtmpfs, then hide unwanted categories with --tmpfs` \
       --dev /dev \
+      `# Hide audio/video/USB devices` \
       --tmpfs /dev/snd \
       --tmpfs /dev/input \
       --tmpfs /dev/usb \
@@ -271,24 +309,32 @@ bwrap --unshare-user-try --unshare-pid --unshare-uts --unshare-cgroup \
       --tmpfs /dev/video1 \
       --tmpfs /dev/video2 \
       --tmpfs /dev/video3 \
+      `# Hide system hardware access` \
       --tmpfs /dev/watchdog \
       --tmpfs /dev/watchdog0 \
       --tmpfs /dev/rfkill \
       --tmpfs /dev/snapshot \
+      `# Hide virtualization devices` \
       --tmpfs /dev/vboxdrv \
       --tmpfs /dev/vboxdrvu \
       --tmpfs /dev/vboxnetctl \
       --tmpfs /dev/vboxusb \
       --tmpfs /dev/vfio \
+      `# === GPU access (whitelisted DRI devices) ===` \
       $GPU_BINDS \
+      `# === Sandbox directories ===` \
       --bind "$SANDBOX_TEMP" /tmp \
-      $DISPLAY_BINDS \
       --proc /proc \
       --bind "$SANDBOX_HOME" "/home/$USERNAME" \
+      `# === Display server (Wayland) ===` \
+      $DISPLAY_BINDS \
+      `# === COW snapshots (Julia, Tectonic, etc.) ===` \
       $COW_BINDS \
-      $TOOL_BINDS \
+      `# === Project directory ===` \
       --bind "$PROJECT_ROOT" "$PROJECT_ROOT" \
+      `# === D-Bus (isolated session) ===` \
       --bind "$SANDBOX_DBUS_DIR/bus" "$XDG_RUNTIME_DIR/bus" \
+      `# === Environment variables ===` \
       --setenv HOME "/home/$USERNAME" \
       --setenv WAYLAND_DISPLAY "$WAYLAND_DISPLAY" \
       --setenv XDG_RUNTIME_DIR "$XDG_RUNTIME_DIR" \
@@ -298,6 +344,7 @@ bwrap --unshare-user-try --unshare-pid --unshare-uts --unshare-cgroup \
       --setenv OPENAI_API_BASE "$OPENAI_API_BASE" \
       --setenv ANTHROPIC_API_KEY "$ANTHROPIC_API_KEY" \
       --setenv TMPDIR "/tmp" \
+      `# === Launch WezTerm ===` \
       /usr/bin/wezterm start --cwd "$PROJECT_ROOT"
 
 # Capture the exit code
@@ -312,7 +359,7 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
    for subvol in "$JULIA_DEPOT_SANDBOX" "$JULIAUP_SANDBOX" "$TECTONIC_CACHE_SANDBOX"; do
        if [ -d "$subvol" ]; then
            echo "Trying to delete BTRFS subvolume: $subvol"
-           if btrfs subvolume delete "$subvol" 2>/dev/null; then
+           if btrfs -q subvolume delete "$subvol" 2>/dev/null; then
                echo "Successfully deleted subvolume: $subvol"
            fi
        fi
