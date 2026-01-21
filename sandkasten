@@ -7,9 +7,6 @@
 
 # === HELPER FUNCTIONS ===
 
-# Get user name
-USERNAME=$(whoami)
-
 create_cow_snapshot() {
     local SOURCE_DIR="$1"
     local DEST_DIR="$2"
@@ -164,16 +161,16 @@ COW_BINDS=""
 # Julia-related directories (only if requested)
 if [ "$WITH_JULIA" = true ]; then
     JULIA_DEPOT_SANDBOX=$(create_cow_snapshot "$HOME/.julia" "$SANDBOX_HOME/.julia")
-    COW_BINDS="$COW_BINDS --bind $JULIA_DEPOT_SANDBOX /home/$USERNAME/.julia"
+    COW_BINDS="$COW_BINDS --bind $JULIA_DEPOT_SANDBOX /home/$USER/.julia"
     
     JULIAUP_SANDBOX=$(create_cow_snapshot "$HOME/.juliaup" "$SANDBOX_HOME/.juliaup")
-    COW_BINDS="$COW_BINDS --bind $JULIAUP_SANDBOX /home/$USERNAME/.juliaup"
+    COW_BINDS="$COW_BINDS --bind $JULIAUP_SANDBOX /home/$USER/.juliaup"
 fi
 
 # Tectonic cache
 mkdir -p "$SANDBOX_HOME/.cache"
 TECTONIC_CACHE_SANDBOX=$(create_cow_snapshot "$HOME/.cache/Tectonic" "$SANDBOX_HOME/.cache/Tectonic")
-COW_BINDS="$COW_BINDS --bind $TECTONIC_CACHE_SANDBOX /home/$USERNAME/.cache/Tectonic"
+COW_BINDS="$COW_BINDS --bind $TECTONIC_CACHE_SANDBOX /home/$USER/.cache/Tectonic"
 
 
 # Patch wezterm.lua to uncomment sandbox-specific settings
@@ -325,7 +322,7 @@ bwrap --unshare-user-try \
       `# === Sandbox directories ===` \
       --bind "$SANDBOX_TEMP" /tmp \
       --proc /proc \
-      --bind "$SANDBOX_HOME" "/home/$USERNAME" \
+      --bind "$SANDBOX_HOME" "/home/$USER" \
       `# === Display server (Wayland) ===` \
       $DISPLAY_BINDS \
       `# === COW snapshots (Julia, Tectonic, etc.) ===` \
@@ -335,7 +332,7 @@ bwrap --unshare-user-try \
       `# === D-Bus (isolated session) ===` \
       --bind "$SANDBOX_DBUS_DIR/bus" "$XDG_RUNTIME_DIR/bus" \
       `# === Environment variables ===` \
-      --setenv HOME "/home/$USERNAME" \
+      --setenv HOME "/home/$USER" \
       --setenv WAYLAND_DISPLAY "$WAYLAND_DISPLAY" \
       --setenv XDG_RUNTIME_DIR "$XDG_RUNTIME_DIR" \
       --setenv DBUS_SESSION_BUS_ADDRESS "unix:path=$XDG_RUNTIME_DIR/bus" \
