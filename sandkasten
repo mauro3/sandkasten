@@ -61,7 +61,6 @@ mkdir -p "$SANDBOX_HOME/.config/opencode"
 mkdir -p "$SANDBOX_HOME/.config/git"
 mkdir -p "$SANDBOX_HOME/.local/share/fish"
 mkdir -p "$SANDBOX_HOME/.local/share/opencode"
-mkdir -p "$SANDBOX_HOME/.local/share/flatpak"
 mkdir -p "$SANDBOX_HOME/.cargo/bin"
 mkdir -p "$SANDBOX_HOME/.local/bin"
 mkdir -p "$SANDBOX_HOME/julia"
@@ -138,22 +137,6 @@ else
     mkdir -p "$TECTONIC_CACHE_SANDBOX"
 fi
 COW_BINDS="$COW_BINDS --bind $TECTONIC_CACHE_SANDBOX /home/$USERNAME/.cache/Tectonic"
-
-# Create Flatpak user directory snapshot/copy
-FLATPAK_USER_SANDBOX="$SANDBOX_HOME/.local/share/flatpak"
-if [ -d "$HOME/.local/share/flatpak" ]; then
-    echo "Creating Flatpak user directory snapshot..."
-    mkdir -p "$SANDBOX_HOME/.local/share"
-    if btrfs subvolume snapshot "$HOME/.local/share/flatpak" "$FLATPAK_USER_SANDBOX" 2>/dev/null; then
-        echo "BTRFS snapshot created successfully"
-    else
-        echo "BTRFS snapshot failed, copying with COW if available..."
-        cp -r "$HOME/.local/share/flatpak" "$FLATPAK_USER_SANDBOX"
-    fi
-else
-    mkdir -p "$FLATPAK_USER_SANDBOX"
-fi
-COW_BINDS="$COW_BINDS --bind $FLATPAK_USER_SANDBOX /home/$USERNAME/.local/share/flatpak"
 
 
 
@@ -311,7 +294,6 @@ bwrap --unshare-user-try --unshare-pid --unshare-uts --unshare-cgroup \
       --setenv XDG_RUNTIME_DIR "$XDG_RUNTIME_DIR" \
       --setenv DBUS_SESSION_BUS_ADDRESS "unix:path=$XDG_RUNTIME_DIR/bus" \
       --setenv PATH "$PATH" \
-      --setenv XDG_DATA_DIRS "/home/$USERNAME/.local/share/flatpak/exports/share:/var/lib/flatpak/exports/share:/usr/local/share/:/usr/share/" \
       --setenv OPENAI_API_KEY "$OPENAI_API_KEY" \
       --setenv OPENAI_API_BASE "$OPENAI_API_BASE" \
       --setenv ANTHROPIC_API_KEY "$ANTHROPIC_API_KEY" \
@@ -327,7 +309,7 @@ read -p "Delete sandbox directory $SANDBOX_HOME and temp $SANDBOX_TEMP? (y/N)" -
 echo    # move to a new line
 if [[ $REPLY =~ ^[Yy]$ ]]; then
    # Try to delete BTRFS subvolumes first for faster cleanup
-   for subvol in "$JULIA_DEPOT_SANDBOX" "$JULIAUP_SANDBOX" "$TECTONIC_CACHE_SANDBOX" "$FLATPAK_USER_SANDBOX"; do
+   for subvol in "$JULIA_DEPOT_SANDBOX" "$JULIAUP_SANDBOX" "$TECTONIC_CACHE_SANDBOX"; do
        if [ -d "$subvol" ]; then
            echo "Trying to delete BTRFS subvolume: $subvol"
            if btrfs subvolume delete "$subvol" 2>/dev/null; then
