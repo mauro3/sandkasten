@@ -27,85 +27,11 @@ create_cow_snapshot() {
     echo "$DEST_DIR"
 }
 
-setup_sandbox_directories() {
-    local SANDBOX_HOME="$1"
-    
-    # Configuration directories
-    mkdir -p "$SANDBOX_HOME/.config/fish"
-    mkdir -p "$SANDBOX_HOME/.config/wezterm"
-    mkdir -p "$SANDBOX_HOME/.config/helix"
-    mkdir -p "$SANDBOX_HOME/.config/zathura"
-    mkdir -p "$SANDBOX_HOME/.config/opencode"
-    mkdir -p "$SANDBOX_HOME/.config/git"
-    
-    # Local directories
-    mkdir -p "$SANDBOX_HOME/.local/share/fish"
-    mkdir -p "$SANDBOX_HOME/.local/share/opencode"
-    mkdir -p "$SANDBOX_HOME/.local/bin"
-    mkdir -p "$SANDBOX_HOME/.cargo/bin"
-    
-    # Other directories
-    mkdir -p "$SANDBOX_HOME/julia"
-}
-
-copy_sandbox_configs() {
-    local SANDBOX_HOME="$1"
-    
-    # OpenCode authentication
-    [ -f "$HOME/.local/share/opencode/auth.json" ] && \
-        cp "$HOME/.local/share/opencode/auth.json" "$SANDBOX_HOME/.local/share/opencode/auth.json"
-    
-    # Shell configuration
-    [ -f "$HOME/.config/fish/config.fish" ] && \
-        cp "$HOME/.config/fish/config.fish" "$SANDBOX_HOME/.config/fish/"
-    
-    # Terminal and editor configs
-    [ -f "$HOME/.config/wezterm/wezterm.lua" ] && \
-        cp "$HOME/.config/wezterm/wezterm.lua" "$SANDBOX_HOME/.config/wezterm/"
-    [ -f "$HOME/.config/helix/config.toml" ] && \
-        cp "$HOME/.config/helix/config.toml" "$SANDBOX_HOME/.config/helix/"
-    [ -f "$HOME/.config/helix/languages.toml" ] && \
-        cp "$HOME/.config/helix/languages.toml" "$SANDBOX_HOME/.config/helix/"
-    [ -f "$HOME/.config/zathura/zathurarc" ] && \
-        cp "$HOME/.config/zathura/zathurarc" "$SANDBOX_HOME/.config/zathura/"
-    
-    # Directories
-    [ -d "$HOME/.config/vale" ] && \
-        cp -r "$HOME/.config/vale" "$SANDBOX_HOME/.config"
-    [ -d "$HOME/.config/opencode" ] && \
-        cp -r "$HOME/.config/opencode" "$SANDBOX_HOME/.config"
-    [ -d "$HOME/.config/git" ] && \
-        cp -r "$HOME/.config/git" "$SANDBOX_HOME/.config"
-    
-    # Git configuration
-    [ -f "$HOME/.gitignore.global" ] && \
-        cp "$HOME/.gitignore.global" "$SANDBOX_HOME"
-    
-    # Julia configuration
-    [ -d "$HOME/julia/dot-julia-config" ] && \
-        cp -r "$HOME/julia/dot-julia-config" "$SANDBOX_HOME/julia/"
-    [ -d "$HOME/julia/dot-julia-environments" ] && \
-        cp -r "$HOME/julia/dot-julia-environments" "$SANDBOX_HOME/julia/"
-    
-    # Scripts and binaries
-    [ -f "$HOME/.local/bin/juliap" ] && \
-        cp "$HOME/.local/bin/juliap" "$SANDBOX_HOME/bin/"
-    [ -f "$HOME/.local/bin/meld" ] && \
-        cp "$HOME/.local/bin/meld" "$SANDBOX_HOME/bin/"
-    [ -f "$HOME/.local/bin/helix-repl-start.sh" ] && \
-        cp "$HOME/.local/bin/helix-repl-start.sh" "$SANDBOX_HOME/.local/bin/"
-    [ -f "$HOME/.local/bin/vale-ls" ] && \
-        cp "$HOME/.local/bin/vale-ls" "$SANDBOX_HOME/.local/bin/"
-    [ -f "$HOME/.cargo/bin/simple-completion-language-server" ] && \
-        cp "$HOME/.cargo/bin/simple-completion-language-server" "$SANDBOX_HOME/.cargo/bin/"
-}
-
 # === MAIN SCRIPT ===
 
-# Parse arguments
+## Parse arguments 
 WITH_JULIA=true
 PROJECT_ROOT=""
-
 while [[ $# -gt 0 ]]; do
     case $1 in
         --no-julia)
@@ -124,19 +50,12 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Project directory from argument or current directory
+## Project directory from argument or current directory
 PROJECT_ROOT=$(realpath "${PROJECT_ROOT:-$(pwd)}")
 echo "Setting up sandbox for: $PROJECT_ROOT"
-if [ "$WITH_JULIA" = true ]; then
-    echo "Julia support enabled"
-else
-    echo "Julia support disabled (use without --no-julia to enable)"
-fi
+mkdir -p "$PROJECT_ROOT" # Ensure the project directory exists
 
-# Ensure the project directory exists
-mkdir -p "$PROJECT_ROOT"
-
-# Create sandbox directory in cache with date and random string
+## Create sandbox directory in cache with date and random string
 CACHE_DIR="$HOME/.cache/sandkasten"
 mkdir -p "$CACHE_DIR"
 RANDOM_SUFFIX=$(openssl rand -hex 8)  # 8-character hex string
@@ -144,20 +63,75 @@ SANDBOX_HOME="$CACHE_DIR/$(date +%Y-%m-%d)_$RANDOM_SUFFIX"
 mkdir -p "$SANDBOX_HOME"
 echo "Sandbox home: $SANDBOX_HOME"
 
-# Create a temp directory (i.e. /tmp) that will persist during the sandbox session
+## Create a temp directory (i.e. /tmp) that will persist during the sandbox session
 SANDBOX_TEMP="/tmp/sandkasten.tmp.$(date +%Y-%m-%d)_$RANDOM_SUFFIX"
 mkdir -p "$SANDBOX_TEMP"
 echo "Temp-dir: $SANDBOX_TEMP"
 
-# Set up minimal configuration directories
-setup_sandbox_directories "$SANDBOX_HOME"
+## Set up minimal configuration directories
+# Note that configs are copied such that they can be modified, as some are
+# Configuration directories
+mkdir -p "$SANDBOX_HOME/.config/fish"
+mkdir -p "$SANDBOX_HOME/.config/wezterm"
+mkdir -p "$SANDBOX_HOME/.config/helix"
+mkdir -p "$SANDBOX_HOME/.config/zathura"
+mkdir -p "$SANDBOX_HOME/.config/opencode"
+mkdir -p "$SANDBOX_HOME/.config/git"
+# Local directories
+mkdir -p "$SANDBOX_HOME/.local/share/fish"
+mkdir -p "$SANDBOX_HOME/.local/share/opencode"
+mkdir -p "$SANDBOX_HOME/.local/bin"
+mkdir -p "$SANDBOX_HOME/.cargo/bin"
 
-# Copy essential configuration files
-copy_sandbox_configs "$SANDBOX_HOME"
+# Other directories
+mkdir -p "$SANDBOX_HOME/julia"
 
-# Larger directories are copied on write (COW), if possible
+## Copy essential configuration files
+# OpenCode authentication
+[ -f "$HOME/.local/share/opencode/auth.json" ] && \
+    cp "$HOME/.local/share/opencode/auth.json" "$SANDBOX_HOME/.local/share/opencode/auth.json"
+# Shell configuration
+[ -f "$HOME/.config/fish/config.fish" ] && \
+    cp "$HOME/.config/fish/config.fish" "$SANDBOX_HOME/.config/fish/"
+# Terminal and editor configs
+[ -f "$HOME/.config/wezterm/wezterm.lua" ] && \
+    cp "$HOME/.config/wezterm/wezterm.lua" "$SANDBOX_HOME/.config/wezterm/"
+[ -f "$HOME/.config/helix/config.toml" ] && \
+    cp "$HOME/.config/helix/config.toml" "$SANDBOX_HOME/.config/helix/"
+[ -f "$HOME/.config/helix/languages.toml" ] && \
+    cp "$HOME/.config/helix/languages.toml" "$SANDBOX_HOME/.config/helix/"
+[ -f "$HOME/.config/zathura/zathurarc" ] && \
+    cp "$HOME/.config/zathura/zathurarc" "$SANDBOX_HOME/.config/zathura/"
+# Git configuration
+[ -f "$HOME/.gitignore.global" ] && \
+    cp "$HOME/.gitignore.global" "$SANDBOX_HOME"
+# Scripts and binaries
+[ -f "$HOME/.local/bin/juliap" ] && \
+    cp "$HOME/.local/bin/juliap" "$SANDBOX_HOME/bin/"
+[ -f "$HOME/.local/bin/meld" ] && \
+    cp "$HOME/.local/bin/meld" "$SANDBOX_HOME/bin/"
+[ -f "$HOME/.local/bin/helix-repl-start.sh" ] && \
+    cp "$HOME/.local/bin/helix-repl-start.sh" "$SANDBOX_HOME/.local/bin/"
+[ -f "$HOME/.local/bin/vale-ls" ] && \
+    cp "$HOME/.local/bin/vale-ls" "$SANDBOX_HOME/.local/bin/"
+[ -f "$HOME/.cargo/bin/simple-completion-language-server" ] && \
+    cp "$HOME/.cargo/bin/simple-completion-language-server" "$SANDBOX_HOME/.cargo/bin/"
+
+## Copy configuration directories
+[ -d "$HOME/.config/vale" ] && \
+    cp -r "$HOME/.config/vale" "$SANDBOX_HOME/.config"
+[ -d "$HOME/.config/opencode" ] && \
+    cp -r "$HOME/.config/opencode" "$SANDBOX_HOME/.config"
+[ -d "$HOME/.config/git" ] && \
+    cp -r "$HOME/.config/git" "$SANDBOX_HOME/.config"
+# Julia configuration
+[ -d "$HOME/julia/dot-julia-config" ] && \
+    cp -r "$HOME/julia/dot-julia-config" "$SANDBOX_HOME/julia/"
+[ -d "$HOME/julia/dot-julia-environments" ] && \
+    cp -r "$HOME/julia/dot-julia-environments" "$SANDBOX_HOME/julia/"
+
+## Larger directories are copied on write (COW), if possible
 COW_BINDS=""
-
 # Julia-related directories (only if requested)
 if [ "$WITH_JULIA" = true ]; then
     JULIA_DEPOT_SANDBOX=$(create_cow_snapshot "$HOME/.julia" "$SANDBOX_HOME/.julia")
@@ -166,19 +140,17 @@ if [ "$WITH_JULIA" = true ]; then
     JULIAUP_SANDBOX=$(create_cow_snapshot "$HOME/.juliaup" "$SANDBOX_HOME/.juliaup")
     COW_BINDS="$COW_BINDS --bind $JULIAUP_SANDBOX /home/$USER/.juliaup"
 fi
-
 # Tectonic cache
 mkdir -p "$SANDBOX_HOME/.cache"
 TECTONIC_CACHE_SANDBOX=$(create_cow_snapshot "$HOME/.cache/Tectonic" "$SANDBOX_HOME/.cache/Tectonic")
 COW_BINDS="$COW_BINDS --bind $TECTONIC_CACHE_SANDBOX /home/$USER/.cache/Tectonic"
 
-
-# Patch wezterm.lua to uncomment sandbox-specific settings
+## Patch config
+# wezterm.lua to uncomment sandbox-specific settings
 if [ -f "$SANDBOX_HOME/.config/wezterm/wezterm.lua" ]; then
   sed -i 's/-- config.use_fancy_tab_bar = false/config.use_fancy_tab_bar = false/' "$SANDBOX_HOME/.config/wezterm/wezterm.lua"
   sed -i 's/-- config.colors.tab_bar = { background = "#9C923C" }/config.colors.tab_bar = { background = "#9C923C" }/' "$SANDBOX_HOME/.config/wezterm/wezterm.lua"
 fi
-
 # Create sandbox-specific fish configuration
 cat > "$SANDBOX_HOME/.config/fish/sandbox.fish" <<EOF
 # Sandbox-specific Fish configuration
@@ -198,15 +170,13 @@ set -x ANTHROPIC_API_KEY "$ANTHROPIC_API_KEY"
 # Graphics configuration for Julia
 set -x LIBGL_ALWAYS_SOFTWARE "1"
 
-
 # Welcome message
 echo "🔒 Sandboxed Environment: $PROJECT_ROOT 🔒"
 EOF
-
-# Append sandbox config to config.fish
+# Append sandbox config to config.fish# 
 echo "source ~/.config/fish/sandbox.fish" >> "$SANDBOX_HOME/.config/fish/config.fish"
 
-# Terminal launcher script
+## Terminal launcher script
 cat > "$SANDBOX_HOME/terminal.sh" <<EOF
 #!/bin/bash
 cd "$PROJECT_ROOT" || echo "Failed to change to project directory: \$?"
@@ -214,31 +184,26 @@ exec fish
 EOF
 chmod +x "$SANDBOX_HOME/terminal.sh"
 
-# Display server configuration
+## Display server configuration
 DISPLAY_BINDS=""
 # Wayland
 DISPLAY_BINDS="--ro-bind $XDG_RUNTIME_DIR/$WAYLAND_DISPLAY $XDG_RUNTIME_DIR/$WAYLAND_DISPLAY"
 
-# Set up isolated D-Bus session for sandbox
+## Set up isolated D-Bus session for sandbox
 SANDBOX_DBUS_DIR="$SANDBOX_HOME/.dbus-session"
 mkdir -p "$SANDBOX_DBUS_DIR"
-
 echo "Starting isolated D-Bus session..."
 # Start D-Bus daemon in background
 dbus-daemon --session --address="unix:path=$SANDBOX_DBUS_DIR/bus" --nofork --print-pid &
 DBUS_PID=$!
-
 # Wait a moment for D-Bus to start
 sleep 1
-
 # Verify D-Bus is running
 if ! kill -0 $DBUS_PID 2>/dev/null; then
     echo "Failed to start D-Bus daemon"
     exit 1
 fi
-
 echo "D-Bus daemon started with PID: $DBUS_PID"
-
 # Add cleanup function
 cleanup() {
     echo "Cleaning up D-Bus daemon..."
@@ -247,7 +212,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Add DRI access permissions for GPU
+## Add DRI access permissions for GPU
 GPU_BINDS=""
 for dev in /dev/dri/renderD* /dev/dri/card*; do
   if [ -e "$dev" ]; then
@@ -256,7 +221,7 @@ for dev in /dev/dri/renderD* /dev/dri/card*; do
   fi
 done
 
-# Launch sandbox
+## Launch sandbox
 echo "Launching sandboxed WezTerm..."
 
 # Device access strategy: blacklist approach
@@ -348,7 +313,7 @@ bwrap --unshare-user-try \
 BWRAP_EXIT=$?
 echo "bwrap exited with code: $BWRAP_EXIT"
 
-# Clean up
+## Clean up
 read -p "Delete sandbox directory $SANDBOX_HOME and temp $SANDBOX_TEMP? (y/N)" -n 1 -r
 echo    # move to a new line
 if [[ $REPLY =~ ^[Yy]$ ]]; then
