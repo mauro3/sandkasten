@@ -3,7 +3,7 @@
 # Run development environment in sandbox by spawning a wezterm session. Tools include:
 # - Julia lang
 # - Helix editor
-# - aider AI coder
+# - opencode AI-agentic coder
 
 # Parse arguments
 WITH_JULIA=true
@@ -57,31 +57,36 @@ mkdir -p "$SANDBOX_HOME/.config/fish"
 mkdir -p "$SANDBOX_HOME/.config/wezterm"
 mkdir -p "$SANDBOX_HOME/.config/helix"
 mkdir -p "$SANDBOX_HOME/.config/zathura"
+mkdir -p "$SANDBOX_HOME/.config/opencode"
+mkdir -p "$SANDBOX_HOME/.config/git"
 mkdir -p "$SANDBOX_HOME/.local/share/fish"
-mkdir -p "$SANDBOX_HOME/.cargo/bin/"
-mkdir -p "$SANDBOX_HOME/bin"
+mkdir -p "$SANDBOX_HOME/.local/share/opencode"
+mkdir -p "$SANDBOX_HOME/.local/share/flatpak"
+mkdir -p "$SANDBOX_HOME/.cargo/bin"
+mkdir -p "$SANDBOX_HOME/.local/bin"
 mkdir -p "$SANDBOX_HOME/julia"
 
 # Copy essential configuration files
+[ -f "$HOME/.local/share/opencode/auth.json" ] && cp "$HOME/.local/share/opencode/auth.json" "$SANDBOX_HOME/.local/share/opencode/auth.json"
 [ -f "$HOME/.config/fish/config.fish" ] && cp "$HOME/.config/fish/config.fish" "$SANDBOX_HOME/.config/fish/"
 [ -f "$HOME/.config/wezterm/wezterm.lua" ] && cp "$HOME/.config/wezterm/wezterm.lua" "$SANDBOX_HOME/.config/wezterm/"
 [ -f "$HOME/.config/helix/config.toml" ] && cp "$HOME/.config/helix/config.toml" "$SANDBOX_HOME/.config/helix/"
 [ -f "$HOME/.config/helix/languages.toml" ] && cp "$HOME/.config/helix/languages.toml" "$SANDBOX_HOME/.config/helix/"
 [ -f "$HOME/.config/zathura/zathurarc" ] && cp "$HOME/.config/zathura/zathurarc" "$SANDBOX_HOME/.config/zathura/"
 [ -d "$HOME/.config/vale" ] && cp -r "$HOME/.config/vale" "$SANDBOX_HOME/.config"
+[ -d "$HOME/.config/opencode" ] && cp -r "$HOME/.config/opencode" "$SANDBOX_HOME/.config"
 [ -f "$HOME/.gitignore.global" ] && cp "$HOME/.gitignore.global" "$SANDBOX_HOME"
-[ -f "$HOME/.aider.conf.yml" ] && cp "$HOME/.aider.conf.yml" "$SANDBOX_HOME"
-[ -f "$HOME/.gitconfig" ] && cp "$HOME/.gitconfig" "$SANDBOX_HOME"
+[ -d "$HOME/.config/git" ] && cp -r "$HOME/.config/git" "$SANDBOX_HOME/.config"
 [ -d "$HOME/julia/dot-julia-config" ] && cp -r "$HOME/julia/dot-julia-config" "$SANDBOX_HOME/julia/"
 [ -d "$HOME/julia/dot-julia-environments" ] && cp -r "$HOME/julia/dot-julia-environments" "$SANDBOX_HOME/julia/"
 # [ -d "$HOME/julia/dot-julia-dev" ] && cp -r "$HOME/julia/dot-julia-dev" "$SANDBOX_HOME/julia/"
 # copy configuration folders
 # [ -d "$HOME/.config/meld" ] && cp -r "$HOME/.config/meld" "$SANDBOX_HOME/.config/"
-[ -d "$HOME/.aider" ] && cp -r "$HOME/.aider" "$SANDBOX_HOME"
 # copy needed shell scripts
-[ -f "$HOME/bin/juliap" ] && cp "$HOME/bin/juliap" "$SANDBOX_HOME/bin/"
-[ -f "$HOME/bin/helix-repl-start.sh" ] && cp "$HOME/bin/helix-repl-start.sh" "$SANDBOX_HOME/bin/"
-[ -f "$HOME/bin/vale-ls" ] && cp "$HOME/bin/vale-ls" "$SANDBOX_HOME/bin/"
+[ -f "$HOME/.local/bin/juliap" ] && cp "$HOME/.local/bin/juliap" "$SANDBOX_HOME/bin/"
+[ -f "$HOME/.local/bin/juliap" ] && cp "$HOME/.local/bin/meld" "$SANDBOX_HOME/bin/"
+[ -f "$HOME/.local/bin/helix-repl-start.sh" ] && cp "$HOME/.local/bin/helix-repl-start.sh" "$SANDBOX_HOME/.local/bin/"
+[ -f "$HOME/.local/bin/vale-ls" ] && cp "$HOME/.local/bin/vale-ls" "$SANDBOX_HOME/.local/bin/"
 [ -f "$HOME/.cargo/bin/simple-completion-language-server" ] && cp "$HOME/.cargo/bin/simple-completion-language-server" "$SANDBOX_HOME/.cargo/bin/simple-completion-language-server"
 
 # Larger directories are copyed on write (COW), if possible
@@ -101,6 +106,7 @@ if [ "$WITH_JULIA" = true ]; then
     else
         mkdir -p "$JULIA_DEPOT_SANDBOX"
     fi
+
 
     # Create Juliaup directory snapshot/copy
     JULIAUP_SANDBOX="$SANDBOX_HOME/.juliaup"
@@ -132,6 +138,22 @@ else
     mkdir -p "$TECTONIC_CACHE_SANDBOX"
 fi
 COW_BINDS="$COW_BINDS --bind $TECTONIC_CACHE_SANDBOX /home/$USERNAME/.cache/Tectonic"
+
+# Create Flatpak user directory snapshot/copy
+FLATPAK_USER_SANDBOX="$SANDBOX_HOME/.local/share/flatpak"
+if [ -d "$HOME/.local/share/flatpak" ]; then
+    echo "Creating Flatpak user directory snapshot..."
+    mkdir -p "$SANDBOX_HOME/.local/share"
+    if btrfs subvolume snapshot "$HOME/.local/share/flatpak" "$FLATPAK_USER_SANDBOX" 2>/dev/null; then
+        echo "BTRFS snapshot created successfully"
+    else
+        echo "BTRFS snapshot failed, copying with COW if available..."
+        cp -r "$HOME/.local/share/flatpak" "$FLATPAK_USER_SANDBOX"
+    fi
+else
+    mkdir -p "$FLATPAK_USER_SANDBOX"
+fi
+COW_BINDS="$COW_BINDS --bind $FLATPAK_USER_SANDBOX /home/$USERNAME/.local/share/flatpak"
 
 
 
@@ -178,19 +200,6 @@ chmod +x "$SANDBOX_HOME/terminal.sh"
 
 # Get user name
 USERNAME=$(whoami)
-
-# Get path to aider
-AIDER_PATH=$(which aider || echo "")
-
-# Tool binds - only add aider as requested
-TOOL_BINDS=""
-if [ -n "$AIDER_PATH" ]; then
-    TOOL_BINDS="$TOOL_BINDS --ro-bind $AIDER_PATH $AIDER_PATH"
-    # Add UV directory for aider
-    if [ -d "$HOME/.local/share/uv" ]; then
-        TOOL_BINDS="$TOOL_BINDS --ro-bind $HOME/.local/share/uv $HOME/.local/share/uv"
-    fi
-fi
 
 # Display server configuration
 DISPLAY_BINDS=""
@@ -250,12 +259,17 @@ bwrap --unshare-user-try --unshare-pid --unshare-uts --unshare-cgroup \
       --ro-bind /bin /bin \
       --ro-bind /lib /lib \
       --ro-bind /lib64 /lib64 \
+      --ro-bind /usr/libexec /usr/libexec \
+      --ro-bind /usr/share/zoneinfo /usr/share/zoneinfo \
       --ro-bind /usr/share/fonts /usr/share/fonts \
       --ro-bind /etc/ssl /etc/ssl \
+      --ro-bind /etc/pki /etc/pki \
       --ro-bind /etc/fonts /etc/fonts \
       --ro-bind /etc/resolv.conf /etc/resolv.conf \
       --ro-bind /etc/hosts /etc/hosts \
       --ro-bind /etc/hostname /etc/hostname \
+      --ro-bind /home/linuxbrew  /home/linuxbrew \
+      --ro-bind /var/lib/flatpak  /var/lib/flatpak \
       --share-net \
       --dev /dev \
       --tmpfs /dev/snd \
@@ -296,7 +310,8 @@ bwrap --unshare-user-try --unshare-pid --unshare-uts --unshare-cgroup \
       --setenv WAYLAND_DISPLAY "$WAYLAND_DISPLAY" \
       --setenv XDG_RUNTIME_DIR "$XDG_RUNTIME_DIR" \
       --setenv DBUS_SESSION_BUS_ADDRESS "unix:path=$XDG_RUNTIME_DIR/bus" \
-      --setenv PATH "/usr/local/bin:/usr/bin:/bin:/home/$USERNAME/.local/bin:/home/$USERNAME/.juliaup/bin:/home/$USERNAME/bin" \
+      --setenv PATH "$PATH" \
+      --setenv XDG_DATA_DIRS "/home/$USERNAME/.local/share/flatpak/exports/share:/var/lib/flatpak/exports/share:/usr/local/share/:/usr/share/" \
       --setenv OPENAI_API_KEY "$OPENAI_API_KEY" \
       --setenv OPENAI_API_BASE "$OPENAI_API_BASE" \
       --setenv ANTHROPIC_API_KEY "$ANTHROPIC_API_KEY" \
@@ -312,7 +327,7 @@ read -p "Delete sandbox directory $SANDBOX_HOME and temp $SANDBOX_TEMP? (y/N)" -
 echo    # move to a new line
 if [[ $REPLY =~ ^[Yy]$ ]]; then
    # Try to delete BTRFS subvolumes first for faster cleanup
-   for subvol in "$JULIA_DEPOT_SANDBOX" "$JULIAUP_SANDBOX" "$TECTONIC_CACHE_SANDBOX"; do
+   for subvol in "$JULIA_DEPOT_SANDBOX" "$JULIAUP_SANDBOX" "$TECTONIC_CACHE_SANDBOX" "$FLATPAK_USER_SANDBOX"; do
        if [ -d "$subvol" ]; then
            echo "Trying to delete BTRFS subvolume: $subvol"
            if btrfs subvolume delete "$subvol" 2>/dev/null; then

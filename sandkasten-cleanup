@@ -24,7 +24,7 @@ cleanup_sandbox_dir() {
     
     # Try to delete BTRFS subvolumes first
     local found_subvolumes=false
-    for subvol in "$sandbox_dir"/.julia "$sandbox_dir"/.juliaup "$sandbox_dir/.cache/Tectonic"; do
+    for subvol in "$sandbox_dir"/.julia "$sandbox_dir"/.juliaup "$sandbox_dir/.cache/Tectonic" "$sandbox_dir/.local/share/flatpak"; do
         if [ -d "$subvol" ]; then
             echo "  Trying to delete BTRFS subvolume: $subvol"
             if btrfs subvolume delete "$subvol" 2>/dev/null; then
