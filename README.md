@@ -9,11 +9,10 @@ $ sandkasten
 will spawn a new WezTerm window which is sandboxed (including all its tabs and programs spawned by it) with read-write access to the current folder (but not parent folders). From there other sandboxed programs can be started, including graphical ones, such as a web browser.
 
 #### Health warning
-The setup is geared towards my use cases, namely, Julia coding and LaTeX writing using [Aider](https://aider.chat/) as AI command line agent (all those config files, binaries, etc are copied). However as the `sandkasten` bash script is pretty simple it could easily be adjusted. Albeit, there are many other options around which may wellcomplicatedug-and-play (but may well be a lot more compilcated too), see below for links to a few of them.
+The setup is geared towards my use cases, namely, Julia coding and LaTeX writing using [Aider](https://aider.chat/) as AI command line agent (all those config files, binaries, etc are copied). However as the `sandkasten` bash script is pretty simple it could easily be adjusted. Albeit, there are many other options around which may be more plug-and-play (but may well be a lot more complicated too), see below for links to a few of them.
 
 ## Usage
 
-### Basic Usage
 ```bash
 # Run sandbox in current directory
 # (do not run as root!)
@@ -23,16 +22,14 @@ sandkasten
 sandkasten /path/to/project
 ```
 
-### Without Julia Support
+Without Julia Support
 ```bash
 # Disable Julia
 sandkasten --no-julia
 ```
-disable Julia support (avoids copying ~/.julia, ~/.juliaup)
+which avoids copying `~/.julia`, `~/.juliaup`.
 
-### Cleanup
-
-Remove old sandbox directories by running:
+Cleanup: remove old sandbox directories by running
 ```bash
 sandkasten-cleanup
 ```
