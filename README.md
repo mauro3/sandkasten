@@ -1,6 +1,6 @@
 # Sandkasten
 
-A sandboxed and mostly secure development environment for safe AI-assisted coding. It uses [Bubblewarp](https://github.com/containers/bubblewrap), a lightweight Linux container also used by, e.g., Flatpak. The idea is to have `sandkasten` to be as frictionless as possible to use whilst giving a decent level of protection: likely good enough to guard against accidental AI-havok but not good enough to protect against a malicious actor.
+A sandboxed and mostly secure development environment for safe AI-assisted coding. It uses [Bubblewrap](https://github.com/containers/bubblewrap), a lightweight Linux container also used by, e.g., Flatpak. The idea is to have `sandkasten` to be as frictionless as possible to use whilst giving a decent level of protection: likely good enough to guard against accidental AI-havok but not good enough to protect against a malicious actor.
 
 Running
 ```
@@ -9,7 +9,7 @@ $ sandkasten
 will spawn a new WezTerm window which is sandboxed (including all its tabs and programs spawned by it) with read-write access to the current folder (but not parent folders). From there other sandboxed programs can be started, including graphical ones, such as a web browser.
 
 #### Health warning
-The setup is geared towards my use cases, namely, Julia coding and LaTeX writing using [Aider](https://aider.chat/) as AI command line agent (all those config files, binaries, etc are copied). However as the `sandkasten` bash script is pretty simple it could easily be adjusted. Albeit, there are many other options around which may be more plug-and-play (but may well be a lot more complicated too), see below for links to a few of them.
+The setup is geared towards my use cases, namely, Julia coding and LaTeX writing using an AI command line agent such as opencode (whose configs are copied into the sandbox). However as the `sandkasten` bash script is pretty simple it could easily be adjusted. Albeit, there are many other options around which may be more plug-and-play (but may well be a lot more complicated too), see below for links to a few of them.
 
 ## Usage
 
@@ -40,7 +40,7 @@ Requirements:
 - Linux system with bubblewrap (`bwrap`) installed
 - WezTerm terminal emulator
 - Fish shell
-- Optional: Julia, Helix, Tectonic, aider AI coder or other agentic AI assistant
+- Optional: Julia, Helix, Tectonic, opencode AI coder or other agentic AI assistant
 - BTRFS filesystem (recommended for efficient copying of a large Julia install)
 
 1. Install dependencies:
@@ -62,7 +62,7 @@ chmod +x sandkasten
 4. BTRFS setup (if using BTRFS):
 
 - make `~/.julia` a subvolume
-- use the `user_subvol_rm_allowed` mount option on the parent btrfs mount to apermissions without root persmissions
+- use the `user_subvol_rm_allowed` mount option on the parent btrfs mount to allow deletion without root permissions
 
 ## How It Works
 
@@ -129,7 +129,6 @@ There are a ton of similar projects out there... a few:
 
 - https://github.com/bigattichouse/scratchpad 
 - https://docs.anthropic.com/en/docs/claude-code/devcontainer
-- https://github.com/nikvdp/cco
 - https://github.com/nikvdp/cco
 - https://github.com/RchGrav/claudebox
 
