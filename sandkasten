@@ -96,10 +96,6 @@ mkdir -p "$SANDBOX_HOME/julia"
 # Terminal and editor configs
 [ -f "$HOME/.config/wezterm/wezterm.lua" ] && \
     cp "$HOME/.config/wezterm/wezterm.lua" "$SANDBOX_HOME/.config/wezterm/"
-[ -f "$HOME/.config/helix/config.toml" ] && \
-    cp "$HOME/.config/helix/config.toml" "$SANDBOX_HOME/.config/helix/"
-[ -f "$HOME/.config/helix/languages.toml" ] && \
-    cp "$HOME/.config/helix/languages.toml" "$SANDBOX_HOME/.config/helix/"
 [ -f "$HOME/.config/zathura/zathurarc" ] && \
     cp "$HOME/.config/zathura/zathurarc" "$SANDBOX_HOME/.config/zathura/"
 # Git configuration
@@ -118,6 +114,8 @@ mkdir -p "$SANDBOX_HOME/julia"
     cp "$HOME/.cargo/bin/simple-completion-language-server" "$SANDBOX_HOME/.cargo/bin/"
 
 ## Copy configuration directories
+[ -d "$HOME/.config/helix" ] && \
+    cp -r "$HOME/.config/helix" "$SANDBOX_HOME/.config"
 [ -d "$HOME/.config/vale" ] && \
     cp -r "$HOME/.config/vale" "$SANDBOX_HOME/.config"
 [ -d "$HOME/.config/opencode" ] && \
