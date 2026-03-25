@@ -79,7 +79,6 @@ mkdir -p "$SANDBOX_HOME/.config/opencode"
 mkdir -p "$SANDBOX_HOME/.config/git"
 # Local directories
 mkdir -p "$SANDBOX_HOME/.local/share/fish"
-mkdir -p "$SANDBOX_HOME/.local/share/opencode"
 mkdir -p "$SANDBOX_HOME/.local/bin"
 mkdir -p "$SANDBOX_HOME/.cargo/bin"
 
@@ -87,9 +86,6 @@ mkdir -p "$SANDBOX_HOME/.cargo/bin"
 mkdir -p "$SANDBOX_HOME/julia"
 
 ## Copy essential configuration files
-# OpenCode authentication
-[ -f "$HOME/.local/share/opencode/auth.json" ] && \
-    cp "$HOME/.local/share/opencode/auth.json" "$SANDBOX_HOME/.local/share/opencode/auth.json"
 # Shell configuration
 [ -f "$HOME/.config/fish/config.fish" ] && \
     cp "$HOME/.config/fish/config.fish" "$SANDBOX_HOME/.config/fish/"
@@ -214,6 +210,9 @@ for dev in /dev/dri/renderD* /dev/dri/card*; do
   fi
 done
 
+## Ensure real opencode data directory exists (needed for bind-mount)
+mkdir -p "$HOME/.local/share/opencode"
+
 ## Launch sandbox
 echo "Launching sandboxed WezTerm..."
 
@@ -281,6 +280,8 @@ bwrap --unshare-user-try \
       --bind "$SANDBOX_TEMP" /tmp \
       --proc /proc \
       --bind "$SANDBOX_HOME" "/home/$USER" \
+      `# === Preserved real directories (bind-mounted from host) ===` \
+      --bind "$HOME/.local/share/opencode" "/home/$USER/.local/share/opencode" \
       `# === Display server (Wayland) ===` \
       $DISPLAY_BINDS \
       `# === COW snapshots (Julia, Tectonic, etc.) ===` \
