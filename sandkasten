@@ -17,7 +17,7 @@ create_cow_snapshot() {
             echo "BTRFS snapshot created successfully" >&2
         else
             echo "BTRFS snapshot failed, copying with COW if available..." >&2
-            cp -r "$SOURCE_DIR" "$DEST_DIR"
+            cp -rL "$SOURCE_DIR" "$DEST_DIR"
         fi
     else
         mkdir -p "$DEST_DIR"
@@ -113,18 +113,18 @@ mkdir -p "$SANDBOX_HOME/julia"
 
 ## Copy configuration directories
 [ -d "$HOME/.config/helix" ] && \
-    cp -r "$HOME/.config/helix" "$SANDBOX_HOME/.config"
+    cp -rL "$HOME/.config/helix" "$SANDBOX_HOME/.config"
 [ -d "$HOME/.config/vale" ] && \
-    cp -r "$HOME/.config/vale" "$SANDBOX_HOME/.config"
+    cp -rL "$HOME/.config/vale" "$SANDBOX_HOME/.config"
 [ -d "$HOME/.config/opencode" ] && \
-    cp -r "$HOME/.config/opencode" "$SANDBOX_HOME/.config"
+    cp -rL "$HOME/.config/opencode" "$SANDBOX_HOME/.config"
 [ -d "$HOME/.config/git" ] && \
-    cp -r "$HOME/.config/git" "$SANDBOX_HOME/.config"
+    cp -rL "$HOME/.config/git" "$SANDBOX_HOME/.config"
 # Julia configuration
 [ -d "$HOME/julia/dot-julia-config" ] && \
-    cp -r "$HOME/julia/dot-julia-config" "$SANDBOX_HOME/julia/"
+    cp -rL "$HOME/julia/dot-julia-config" "$SANDBOX_HOME/julia/"
 [ -d "$HOME/julia/dot-julia-environments" ] && \
-    cp -r "$HOME/julia/dot-julia-environments" "$SANDBOX_HOME/julia/"
+    cp -rL "$HOME/julia/dot-julia-environments" "$SANDBOX_HOME/julia/"
 
 ## Larger directories are copied on write (COW), if possible
 COW_BINDS=""

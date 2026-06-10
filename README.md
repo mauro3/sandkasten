@@ -133,3 +133,7 @@ There are a ton of similar projects out there... a few:
 - https://github.com/RchGrav/claudebox
 
 There are many like it, but this one is mine. 
+
+## TODO / ideas
+
+- allow re-starting with a previous sandboxed environment to get presistent sessions
