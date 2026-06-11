@@ -17,7 +17,7 @@ create_cow_snapshot() {
             echo "BTRFS snapshot created successfully" >&2
         else
             echo "BTRFS snapshot failed, copying with COW if available..." >&2
-            cp -rL "$SOURCE_DIR" "$DEST_DIR"
+            cp -r "$SOURCE_DIR" "$DEST_DIR"
         fi
     else
         mkdir -p "$DEST_DIR"
@@ -132,6 +132,9 @@ COW_BINDS=""
 if [ "$WITH_JULIA" = true ]; then
     JULIA_DEPOT_SANDBOX=$(create_cow_snapshot "$HOME/.julia" "$SANDBOX_HOME/.julia")
     COW_BINDS="$COW_BINDS --bind $JULIA_DEPOT_SANDBOX /home/$USER/.julia"
+    # Fix up known Nix HM symlinks in Julia depot snapshot
+    [ -L "$HOME/.julia/config/startup.jl" ] && \
+        cp "$HOME/.julia/config/startup.jl" "$JULIA_DEPOT_SANDBOX/config/startup.jl"
     
     JULIAUP_SANDBOX=$(create_cow_snapshot "$HOME/.juliaup" "$SANDBOX_HOME/.juliaup")
     COW_BINDS="$COW_BINDS --bind $JULIAUP_SANDBOX /home/$USER/.juliaup"
