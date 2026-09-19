@@ -73,10 +73,7 @@ echo "Temp-dir: $SANDBOX_TEMP"
 # Configuration directories
 mkdir -p "$SANDBOX_HOME/.config/fish"
 mkdir -p "$SANDBOX_HOME/.config/wezterm"
-mkdir -p "$SANDBOX_HOME/.config/helix"
 mkdir -p "$SANDBOX_HOME/.config/zathura"
-mkdir -p "$SANDBOX_HOME/.config/opencode"
-mkdir -p "$SANDBOX_HOME/.config/git"
 # Local directories
 mkdir -p "$SANDBOX_HOME/.local/share/fish"
 mkdir -p "$SANDBOX_HOME/.local/bin"
@@ -99,11 +96,11 @@ mkdir -p "$SANDBOX_HOME/julia"
     cp "$HOME/.gitignore.global" "$SANDBOX_HOME"
 # Scripts and binaries
 [ -f "$HOME/.local/bin/juliap" ] && \
-    cp "$HOME/.local/bin/juliap" "$SANDBOX_HOME/bin/"
+    cp "$HOME/.local/bin/juliap" "$SANDBOX_HOME/.local/bin/"
 [ -f "$HOME/.local/bin/zathura" ] && \
-    cp "$HOME/.local/bin/zathura" "$SANDBOX_HOME/bin/"
+    cp "$HOME/.local/bin/zathura" "$SANDBOX_HOME/.local/bin/"
 [ -f "$HOME/.local/bin/meld" ] && \
-    cp "$HOME/.local/bin/meld" "$SANDBOX_HOME/bin/"
+    cp "$HOME/.local/bin/meld" "$SANDBOX_HOME/.local/bin/"
 [ -f "$HOME/.local/bin/helix-repl-start.sh" ] && \
     cp "$HOME/.local/bin/helix-repl-start.sh" "$SANDBOX_HOME/.local/bin/"
 [ -f "$HOME/.local/bin/vale-ls" ] && \
@@ -122,7 +119,7 @@ mkdir -p "$SANDBOX_HOME/julia"
     cp -rL "$HOME/.config/git" "$SANDBOX_HOME/.config"
 # Julia configuration
 [ -d "$HOME/julia/dot-julia-config" ] && \
-    cp -rL "$HOME/julia/dot-julia-config" "$SANDBOX_HOME/julia/"
+    cp --remove-destination "$HOME/.julia/config/startup.jl" "$SANDBOX_HOME/.julia/config"
 [ -d "$HOME/julia/dot-julia-environments" ] && \
     cp -rL "$HOME/julia/dot-julia-environments" "$SANDBOX_HOME/julia/"
 
@@ -223,6 +220,9 @@ echo "Launching sandboxed WezTerm..."
 # We use --dev to get proper devtmpfs with all infrastructure (symlinks, PTY support, etc.),
 # then use --tmpfs to hide unwanted device categories. See create_cow_snapshot comment for details.
 # To debug missing device access: strace -f -e trace=openat ./sandkasten 2>&1 | grep -E "/dev.*ENOENT"
+#
+# maybe add but the nix store contains all sort of things:
+#  --ro-bind /nix /nix \
 bwrap --unshare-user-try \
       --unshare-pid \
       --unshare-uts \
