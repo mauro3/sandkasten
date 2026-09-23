@@ -29,6 +29,33 @@ create_cow_snapshot() {
 
 # === MAIN SCRIPT ===
 
+## Locate repository-managed resources independently of the current project
+SCRIPT_DIR=$(dirname "$(realpath "${BASH_SOURCE[0]}")")
+NIX_TOOLS_PROFILE="$SCRIPT_DIR/.sandkasten-nix-profile"
+
+if [ ! -e "$NIX_TOOLS_PROFILE" ]; then
+    echo "Nix tools profile not found: $NIX_TOOLS_PROFILE" >&2
+    echo "Build it with: nix build '$SCRIPT_DIR#sandbox-tools' -o '$NIX_TOOLS_PROFILE'" >&2
+    exit 1
+fi
+
+if ! command -v nix-store >/dev/null 2>&1; then
+    echo "nix-store is required to determine the sandbox tools closure" >&2
+    exit 1
+fi
+
+NIX_TOOLS_STORE_PATH=$(realpath "$NIX_TOOLS_PROFILE")
+if ! NIX_CLOSURE=$(nix-store --query --requisites "$NIX_TOOLS_STORE_PATH"); then
+    echo "Failed to determine the Nix closure for: $NIX_TOOLS_PROFILE" >&2
+    exit 1
+fi
+
+NIX_BINDS=(--dir /nix --dir /nix/store --dir /opt)
+while IFS= read -r store_path; do
+    [ -n "$store_path" ] && NIX_BINDS+=(--ro-bind "$store_path" "$store_path")
+done <<< "$NIX_CLOSURE"
+NIX_BINDS+=(--ro-bind "$NIX_TOOLS_STORE_PATH" /opt/sandkasten-tools)
+
 ## Parse arguments 
 WITH_JULIA=true
 PROJECT_ROOT=""
@@ -124,22 +151,22 @@ mkdir -p "$SANDBOX_HOME/julia"
     cp -rL "$HOME/julia/dot-julia-environments" "$SANDBOX_HOME/julia/"
 
 ## Larger directories are copied on write (COW), if possible
-COW_BINDS=""
+COW_BINDS=()
 # Julia-related directories (only if requested)
 if [ "$WITH_JULIA" = true ]; then
     JULIA_DEPOT_SANDBOX=$(create_cow_snapshot "$HOME/.julia" "$SANDBOX_HOME/.julia")
-    COW_BINDS="$COW_BINDS --bind $JULIA_DEPOT_SANDBOX /home/$USER/.julia"
+    COW_BINDS+=(--bind "$JULIA_DEPOT_SANDBOX" "/home/$USER/.julia")
     # Fix up known Nix HM symlinks in Julia depot snapshot
     [ -L "$HOME/.julia/config/startup.jl" ] && \
         cp "$HOME/.julia/config/startup.jl" "$JULIA_DEPOT_SANDBOX/config/startup.jl"
     
     JULIAUP_SANDBOX=$(create_cow_snapshot "$HOME/.juliaup" "$SANDBOX_HOME/.juliaup")
-    COW_BINDS="$COW_BINDS --bind $JULIAUP_SANDBOX /home/$USER/.juliaup"
+    COW_BINDS+=(--bind "$JULIAUP_SANDBOX" "/home/$USER/.juliaup")
 fi
 # Tectonic cache
 mkdir -p "$SANDBOX_HOME/.cache"
 TECTONIC_CACHE_SANDBOX=$(create_cow_snapshot "$HOME/.cache/Tectonic" "$SANDBOX_HOME/.cache/Tectonic")
-COW_BINDS="$COW_BINDS --bind $TECTONIC_CACHE_SANDBOX /home/$USER/.cache/Tectonic"
+COW_BINDS+=(--bind "$TECTONIC_CACHE_SANDBOX" "/home/$USER/.cache/Tectonic")
 
 ## Patch config
 # wezterm.lua to uncomment sandbox-specific settings
@@ -174,9 +201,8 @@ EOF
 echo "source ~/.config/fish/sandbox.fish" >> "$SANDBOX_HOME/.config/fish/config.fish"
 
 ## Display server configuration
-DISPLAY_BINDS=""
 # Wayland
-DISPLAY_BINDS="--ro-bind $XDG_RUNTIME_DIR/$WAYLAND_DISPLAY $XDG_RUNTIME_DIR/$WAYLAND_DISPLAY"
+DISPLAY_BINDS=(--ro-bind "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY")
 
 ## Set up isolated D-Bus session for sandbox
 SANDBOX_DBUS_DIR="$SANDBOX_HOME/.dbus-session"
@@ -202,13 +228,20 @@ cleanup() {
 trap cleanup EXIT
 
 ## Add DRI access permissions for GPU
-GPU_BINDS=""
+GPU_BINDS=()
 for dev in /dev/dri/renderD* /dev/dri/card*; do
   if [ -e "$dev" ]; then
     echo "Binding DRI device: $dev"
-    GPU_BINDS="$GPU_BINDS --dev-bind $dev $dev"
+    GPU_BINDS+=(--dev-bind "$dev" "$dev")
   fi
 done
+
+## Use only explicitly exposed tools and Fedora system paths
+SANDBOX_PATH="/opt/sandkasten-tools/bin:/home/$USER/.local/bin:/home/$USER/.cargo/bin"
+if [ "$WITH_JULIA" = true ]; then
+    SANDBOX_PATH="$SANDBOX_PATH:/home/$USER/.juliaup/bin"
+fi
+SANDBOX_PATH="$SANDBOX_PATH:/usr/local/bin:/usr/bin:/bin"
 
 ## Ensure real opencode data directory exists (needed for bind-mount)
 mkdir -p "$HOME/.local/share/opencode"
@@ -220,9 +253,6 @@ echo "Launching sandboxed WezTerm..."
 # We use --dev to get proper devtmpfs with all infrastructure (symlinks, PTY support, etc.),
 # then use --tmpfs to hide unwanted device categories. See create_cow_snapshot comment for details.
 # To debug missing device access: strace -f -e trace=openat ./sandkasten 2>&1 | grep -E "/dev.*ENOENT"
-#
-# maybe add but the nix store contains all sort of things:
-#  --ro-bind /nix /nix \
 bwrap --unshare-user-try \
       --unshare-pid \
       --unshare-uts \
@@ -243,8 +273,8 @@ bwrap --unshare-user-try \
       --ro-bind /etc/resolv.conf /etc/resolv.conf \
       --ro-bind /etc/hosts /etc/hosts \
       --ro-bind /etc/hostname /etc/hostname \
-      `# === External tools ===` \
-      --ro-bind /home/linuxbrew  /home/linuxbrew \
+      `# === Nix tools and their read-only runtime closure ===` \
+      "${NIX_BINDS[@]}" \
       --share-net \
       `# === Device access (blacklist approach) ===` \
       `# Use --dev for proper devtmpfs, then hide unwanted categories with --tmpfs` \
@@ -278,7 +308,7 @@ bwrap --unshare-user-try \
       --tmpfs /dev/vboxusb \
       --tmpfs /dev/vfio \
       `# === GPU access (whitelisted DRI devices) ===` \
-      $GPU_BINDS \
+      "${GPU_BINDS[@]}" \
       `# === Sandbox directories ===` \
       --bind "$SANDBOX_TEMP" /tmp \
       --proc /proc \
@@ -286,9 +316,9 @@ bwrap --unshare-user-try \
       `# === Preserved real directories (bind-mounted from host) ===` \
       --bind "$HOME/.local/share/opencode" "/home/$USER/.local/share/opencode" \
       `# === Display server (Wayland) ===` \
-      $DISPLAY_BINDS \
+      "${DISPLAY_BINDS[@]}" \
       `# === COW snapshots (Julia, Tectonic, etc.) ===` \
-      $COW_BINDS \
+      "${COW_BINDS[@]}" \
       `# === Project directory ===` \
       --bind "$PROJECT_ROOT" "$PROJECT_ROOT" \
       `# === D-Bus (isolated session) ===` \
@@ -298,7 +328,7 @@ bwrap --unshare-user-try \
       --setenv WAYLAND_DISPLAY "$WAYLAND_DISPLAY" \
       --setenv XDG_RUNTIME_DIR "$XDG_RUNTIME_DIR" \
       --setenv DBUS_SESSION_BUS_ADDRESS "unix:path=$XDG_RUNTIME_DIR/bus" \
-      --setenv PATH "$PATH" \
+      --setenv PATH "$SANDBOX_PATH" \
       --setenv OPENAI_API_KEY "$OPENAI_API_KEY" \
       --setenv OPENAI_API_BASE "$OPENAI_API_BASE" \
       --setenv ANTHROPIC_API_KEY "$ANTHROPIC_API_KEY" \

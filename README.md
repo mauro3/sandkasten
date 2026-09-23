@@ -38,6 +38,7 @@ sandkasten-cleanup
 
 Requirements:
 - Linux system with bubblewrap (`bwrap`) installed
+- Nix with flakes enabled
 - WezTerm terminal emulator
 - Fish shell
 - Optional: Julia, Helix, Tectonic, opencode AI coder or other agentic AI assistant
@@ -52,17 +53,109 @@ sudo pacman -S bubblewrap wezterm fish helix
 sudo apt install bubblewrap wezterm fish-shell helix
 ```
 
-2. Make the script executable:
+2. Build the allowlisted Nix tools environment:
+```bash
+nix build .#sandbox-tools -o .sandkasten-nix-profile
+```
+
+Re-run this command after changing `sandbox-tools.nix` or updating `flake.lock`.
+The generated profile link is ignored by Git and must remain next to the
+`sandkasten` script.
+
+3. Make the script executable:
 ```bash
 chmod +x sandkasten
 ```
 
-3. Optionally, add to your PATH or create a symlink.
+4. Optionally, add to your PATH or create a symlink.
 
-4. BTRFS setup (if using BTRFS):
+5. BTRFS setup (if using BTRFS):
 
 - make `~/.julia` a subvolume
 - use the `user_subvol_rm_allowed` mount option on the parent btrfs mount to allow deletion without root permissions
+
+## Managing the Nix tools
+
+The Nix configuration in this repository is independent of the Nix packages
+installed by Home Manager. It uses the package versions pinned in `flake.lock`
+and exposes only the packages listed in `sandbox-tools.nix`.
+
+Run all commands in this section from the Sandkasten repository.
+
+### Add or remove a package
+
+Edit the `paths` list in `sandbox-tools.nix`. Package names can be found with
+[Nix package search](https://search.nixos.org/packages) or from the command
+line:
+
+```bash
+nix search nixpkgs package-name
+```
+
+Then rebuild the profile:
+
+```bash
+nix build .#sandbox-tools -o .sandkasten-nix-profile
+```
+
+The profile link is updated only after a successful build. Restart Sandkasten
+sessions to use the changed package set.
+
+### Update package versions
+
+An ordinary `nix build` continues to use the exact Nixpkgs revision recorded in
+`flake.lock`. To select newer package versions, update the lock file and rebuild:
+
+```bash
+nix flake update
+nix build .#sandbox-tools -o .sandkasten-nix-profile
+```
+
+Review and commit the resulting `flake.lock` change so other builds use the
+same versions. Updating a separate Home Manager flake does not update this
+profile, and updating this flake does not update Home Manager.
+
+### Check package versions
+
+Run a program through the generated profile, for example:
+
+```bash
+.sandkasten-nix-profile/bin/opencode --version
+.sandkasten-nix-profile/bin/vale --version
+.sandkasten-nix-profile/bin/python3 --version
+```
+
+To compare a sandbox package with the version available through the normal host
+`PATH`:
+
+```bash
+opencode --version
+.sandkasten-nix-profile/bin/opencode --version
+```
+
+To inspect the complete runtime closure, including libraries and other
+dependencies:
+
+```bash
+nix path-info --recursive .#sandbox-tools
+```
+
+This list is intentionally much larger than the package list in
+`sandbox-tools.nix`.
+
+### Clean old packages
+
+The `.sandkasten-nix-profile` link protects the current tools and dependencies
+from garbage collection. After updating the profile, remove store paths that
+are no longer referenced by any Nix profile or other garbage-collection root:
+
+```bash
+nix-collect-garbage
+```
+
+This does not remove packages still used by Sandkasten, Home Manager, or another
+Nix profile. Avoid `nix-collect-garbage -d` unless you also intend to delete old
+profile generations and give up their rollback options.
 
 ## How It Works
 
@@ -71,6 +164,9 @@ chmod +x sandkasten
    - Everything else in the home directory is not accessible
    - Some dev-tools settings and binaries are copied from the host to the sandbox:
      - **Configuration Copying**: Copies essential config files and binaries (Fish, WezTerm, Helix, Git)
+     - **Nix Tools**: Read-only mounts only the runtime closure of the allowlisted
+       `.sandkasten-nix-profile`, exposed inside the sandbox at
+       `/opt/sandkasten-tools`
      - **Julia Environment** (if enabled): Creates copy-on-write snapshots of Julia depot and related directories (`~/.julia` and `~/.juliaup`). Note that I symlink the folders with configurations, namely, `~/.julia/dev`, `config` and `environments` from elsewhere and thus I copy those over.
 2. **Container Launch**: Uses `bwrap` to create isolated namespace with restricted system access
 3. **Development Session**: Launches WezTerm with custom environment and project access
@@ -86,6 +182,8 @@ chmod +x sandkasten
 
 ### What's Isolated
 - System directories (`/usr`, `/bin`, `/lib`) are read-only
+- Only the selected Nix tools and their runtime dependencies are mounted from
+  `/nix/store`; the complete store and Nix daemon are not exposed
 - Julia depot and related directories are copied (not shared)
 - Temporary files are contained within sandbox
 - Configuration changes don't affect main system
