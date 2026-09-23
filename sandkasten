@@ -150,6 +150,15 @@ mkdir -p "$SANDBOX_HOME/julia"
 [ -d "$HOME/julia/dot-julia-environments" ] && \
     cp -rL "$HOME/julia/dot-julia-environments" "$SANDBOX_HOME/julia/"
 
+## Copied configuration must not depend on unmounted Nix store paths
+STORE_REFERENCE_FILES=$(grep -RFl -- '/nix/store/' "$SANDBOX_HOME" 2>/dev/null)
+if [ -n "$STORE_REFERENCE_FILES" ]; then
+    echo "Copied sandbox files contain Nix store references:" >&2
+    printf '%s\n' "$STORE_REFERENCE_FILES" >&2
+    echo "Replace those references or expose their packages through sandbox-tools.nix." >&2
+    exit 1
+fi
+
 ## Larger directories are copied on write (COW), if possible
 COW_BINDS=()
 # Julia-related directories (only if requested)

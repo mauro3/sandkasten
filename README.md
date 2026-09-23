@@ -202,7 +202,9 @@ profile generations and give up their rollback options.
 2. **Configuration copying:** Copies selected Fish, WezTerm, Zathura, Helix,
    Vale, OpenCode, and Git configuration and selected local scripts. Directory
    copies dereference Home Manager symlinks so they remain usable and writable
-   without modifying the host configuration.
+   without modifying the host configuration. Launch stops with an error if a
+   copied file still contains a literal `/nix/store/` reference, because that
+   path may not be part of the mounted tools closure.
 3. **Nix tools:** Resolves the runtime closure of
    `.sandkasten-nix-profile`, mounts only those `/nix/store` paths read-only,
    and exposes the profile as `/opt/sandkasten-tools`. The Nix daemon and the
