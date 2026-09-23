@@ -295,6 +295,6 @@ There are a ton of similar projects out there... a few:
 
 There are many like it, but this one is mine.
 
-## TODO / ideas
+## Future Work
 
-- Allow restarting with a retained sandbox home to support persistent sessions.
+See [TODOs.md](TODOs.md) for the current backlog and deferred ideas.
