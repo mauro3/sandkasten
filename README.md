@@ -1,15 +1,25 @@
 # Sandkasten
 
-A sandboxed and mostly secure development environment for safe AI-assisted coding. It uses [Bubblewrap](https://github.com/containers/bubblewrap), a lightweight Linux container also used by, e.g., Flatpak. The idea is to have `sandkasten` to be as frictionless as possible to use whilst giving a decent level of protection: likely good enough to guard against accidental AI-havok but not good enough to protect against a malicious actor.
+A sandboxed development environment for safer AI-assisted coding. It uses
+[Bubblewrap](https://github.com/containers/bubblewrap), a lightweight Linux
+container tool also used by Flatpak. The aim is to remain frictionless while
+providing useful protection against accidental damage. It is not intended to
+contain malicious code or a malicious actor.
 
 Running
+```bash
+sandkasten
 ```
-$ sandkasten
-```
-will spawn a new WezTerm window which is sandboxed (including all its tabs and programs spawned by it) with read-write access to the current folder (but not parent folders). From there other sandboxed programs can be started, including graphical ones, such as a web browser.
+spawns a sandboxed WezTerm window. Its tabs and child processes have read-write
+access to the selected project directory, but not to its parent directories or
+the rest of the host home. Other programs, including graphical programs, can be
+started from the terminal.
 
 #### Health warning
-The setup is geared towards my use cases, namely, Julia coding and LaTeX writing using an AI command line agent such as opencode (whose configs are copied into the sandbox). However as the `sandkasten` bash script is pretty simple it could easily be adjusted. Albeit, there are many other options around which may be more plug-and-play (but may well be a lot more complicated too), see below for links to a few of them.
+The setup is geared towards Julia coding and LaTeX writing with an AI command
+line agent such as OpenCode. It is intentionally opinionated and copies selected
+files from the host configuration. Other projects may be more general or more
+plug-and-play; some are linked below.
 
 ## Usage
 
@@ -22,36 +32,55 @@ sandkasten
 sandkasten /path/to/project
 ```
 
-Without Julia Support
+Without Julia support:
 ```bash
-# Disable Julia
 sandkasten --no-julia
 ```
-which avoids copying `~/.julia`, `~/.juliaup`.
 
-Cleanup: remove old sandbox directories by running
+This skips the Julia depot and Juliaup snapshots and omits Juliaup from the
+sandbox `PATH`. It does not disable the Tectonic cache snapshot.
+
+After all sandbox sessions have exited, remove every retained sandbox home and
+its matching temporary directory with:
+
 ```bash
 sandkasten-cleanup
+```
+
+To remove only selected homes, pass either their full paths or their directory
+names from `~/.cache/sandkasten`:
+
+```bash
+sandkasten-cleanup 2026-09-23_0123456789abcdef
 ```
 
 ## Installation
 
 Requirements:
-- Linux system with bubblewrap (`bwrap`) installed
+- x86-64 Linux system with Bubblewrap (`bwrap`) installed
 - Nix with flakes enabled
-- WezTerm terminal emulator
-- Fish shell
-- Optional: Julia, Helix, Tectonic, opencode AI coder or other agentic AI assistant
-- BTRFS filesystem (recommended for efficient copying of a large Julia install)
+- WezTerm at `/usr/bin/wezterm`
+- Fish at `/usr/bin/fish`
+- An active Wayland session (`XDG_RUNTIME_DIR` and `WAYLAND_DISPLAY` must be set)
+- Helix (`hx`) and Git from the system installation
+- `bash`, `dbus-daemon`, `openssl`, and standard GNU utilities
+- Optional: Juliaup and Julia
+- Optional: BTRFS and `btrfs-progs` for efficient writable snapshots
 
 1. Install dependencies:
 ```bash
+# Fedora
+sudo dnf install bubblewrap wezterm fish helix git dbus-daemon openssl btrfs-progs
+
 # Arch Linux
-sudo pacman -S bubblewrap wezterm fish helix
+sudo pacman -S bubblewrap wezterm fish helix git dbus openssl btrfs-progs
 
 # Ubuntu/Debian
-sudo apt install bubblewrap wezterm fish-shell helix
+sudo apt install bubblewrap wezterm fish git dbus-daemon openssl btrfs-progs
 ```
+
+Package names and availability vary by distribution. The remaining development
+tools are built from the allowlist in `sandbox-tools.nix`.
 
 2. Build the allowlisted Nix tools environment:
 ```bash
@@ -69,10 +98,18 @@ chmod +x sandkasten
 
 4. Optionally, add to your PATH or create a symlink.
 
+The launcher resolves repository-managed files relative to the real script, so
+it can be invoked through a symlink from any project directory.
+
 5. BTRFS setup (if using BTRFS):
 
-- make `~/.julia` a subvolume
-- use the `user_subvol_rm_allowed` mount option on the parent btrfs mount to allow deletion without root permissions
+- Make large source directories such as `~/.julia` BTRFS subvolumes.
+- Use the `user_subvol_rm_allowed` mount option on the parent BTRFS mount so
+  snapshots can be deleted without root permissions.
+
+Sandkasten attempts a writable BTRFS snapshot for `~/.julia`, `~/.juliaup`, and
+`~/.cache/Tectonic`. A source that is absent becomes an empty directory; a
+source that cannot be snapshotted is copied normally.
 
 ## Managing the Nix tools
 
@@ -159,50 +196,69 @@ profile generations and give up their rollback options.
 
 ## How It Works
 
-1. **Sandbox Creation**: Creates isolated environment in `~/.cache/sandkasten/YYYY-MM-DD_XXXXXXXX` which is the home directory of the sandbox
-   - Project directory gets read-write mounted in its normal filesystem location
-   - Everything else in the home directory is not accessible
-   - Some dev-tools settings and binaries are copied from the host to the sandbox:
-     - **Configuration Copying**: Copies essential config files and binaries (Fish, WezTerm, Helix, Git)
-     - **Nix Tools**: Read-only mounts only the runtime closure of the allowlisted
-       `.sandkasten-nix-profile`, exposed inside the sandbox at
-       `/opt/sandkasten-tools`
-     - **Julia Environment** (if enabled): Creates copy-on-write snapshots of Julia depot and related directories (`~/.julia` and `~/.juliaup`). Note that I symlink the folders with configurations, namely, `~/.julia/dev`, `config` and `environments` from elsewhere and thus I copy those over.
-2. **Container Launch**: Uses `bwrap` to create isolated namespace with restricted system access
-3. **Development Session**: Launches WezTerm with custom environment and project access
-4. **Cleanup**: Optionally removes temporary files after session ends, alternatively use `sandkasten-cleanup` script
+1. **Sandbox creation:** Creates a disposable home at
+   `~/.cache/sandkasten/YYYY-MM-DD_XXXXXXXXXXXXXXXX` and a matching host-side
+   `/tmp/sandkasten.tmp.*` directory that becomes the sandbox `/tmp`.
+2. **Configuration copying:** Copies selected Fish, WezTerm, Zathura, Helix,
+   Vale, OpenCode, and Git configuration and selected local scripts. Directory
+   copies dereference Home Manager symlinks so they remain usable and writable
+   without modifying the host configuration.
+3. **Nix tools:** Resolves the runtime closure of
+   `.sandkasten-nix-profile`, mounts only those `/nix/store` paths read-only,
+   and exposes the profile as `/opt/sandkasten-tools`. The Nix daemon and the
+   rest of the store are not mounted.
+4. **Writable state:** Bind-mounts the project read-write. OpenCode data and
+   history at `~/.local/share/opencode` are also bind-mounted read-write so they
+   persist between sessions. Julia, Juliaup, and Tectonic use disposable
+   writable snapshots or copies instead.
+5. **Session launch:** Creates PID, UTS, cgroup, and attempted user namespace
+   isolation, starts a private D-Bus session, exposes Wayland and selected DRI
+   devices, and launches `/usr/bin/wezterm`.
+6. **Cleanup:** Offers to remove the disposable home and temporary directory
+   when WezTerm exits. Declining keeps them until `sandkasten-cleanup` is run;
+   there is currently no option to resume a retained home.
 
 ## Security Model
 
 ### Protection Provided
-- **Filesystem Isolation**: Limited access to system directories (read-only)
-- **Process Isolation**: Separate PID namespace prevents interference
-- **User Namespace**: Isolated user context
-- **Network Monitoring**: All network access is visible but not restricted
+- **Filesystem isolation:** System files and the selected Nix closure are
+  read-only; the rest of the host home is not mounted.
+- **Process isolation:** A separate PID namespace hides host processes.
+- **Namespace isolation:** UTS and cgroup namespaces are unshared. A user
+  namespace is attempted with `--unshare-user-try` and may be unavailable on
+  some systems.
+- **D-Bus isolation:** Applications use a private session bus rather than the
+  host session bus.
 
 ### What's Isolated
 - System directories (`/usr`, `/bin`, `/lib`) are read-only
 - Only the selected Nix tools and their runtime dependencies are mounted from
   `/nix/store`; the complete store and Nix daemon are not exposed
-- Julia depot and related directories are copied (not shared)
-- Temporary files are contained within sandbox
-- Configuration changes don't affect main system
+- Julia, Juliaup, and Tectonic state use writable snapshots or copies rather
+  than live host binds
+- Sandbox `/tmp` uses a dedicated host directory
+- Copied configuration can be modified without changing its host source
 
 ### What's NOT Isolated
-- **Network Access**: Full internet connectivity (for AI tools, package downloads)
+- **Network Access**: The host network namespace is shared, including internet,
+  LAN, and localhost services
 - **Project Directory**: Direct read/write access to your project files
-- **GPU/Hardware**: Direct access to graphics hardware
-- **API Keys**: Environment variables are passed through
+- **OpenCode State**: Direct read/write access to the host OpenCode data and
+  history directory
+- **GPU/Hardware**: Selected DRI devices are passed through; device hiding uses
+  a blacklist and should not be treated as a strong hardware boundary
+- **API Keys**: `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` are passed through and
+  written into the disposable Fish configuration
 
-⚠️ **Important**: This sandbox provides protection against **accidental damage** but has significant limitations against **malicious intent**.
+**Important:** This sandbox provides protection against accidental damage but
+has significant limitations against malicious intent. Network access allows
+anything readable inside the sandbox to be exfiltrated.
 
 ### Known Security Issues
-Below points 1-3 are required for project work and AI interaction (unless using local AI). Point 4 is partially mitigated. Point 5 assumes configuration files contain no sensitive data.
-
-1. **Network Access**: Full network connectivity allows:
+1. **Network Access**: Sharing the host network namespace allows:
    - Data exfiltration of project files
    - Downloading/uploading arbitrary content
-   - Communication with external services
+   - Communication with internet, LAN, and host-local services
 
 2. **Project Directory Exposure**: 
    - AI has full read/write access to your project
@@ -211,27 +267,32 @@ Below points 1-3 are required for project work and AI interaction (unless using 
 
 3. **API Key Exposure**:
    - OpenAI and Anthropic API keys are passed through
-   - Could be logged or misused by AI tools
+   - Keys can be logged or misused by sandboxed programs
+   - Retained sandbox homes contain the generated Fish file with these keys
 
 4. **Hardware Access**:
-   - Full GPU access could potentially be exploited
-   - Access to `/dev` directory (though containerized)
+   - Passed-through GPU devices could potentially be exploited
+   - The device blacklist may not cover every host-specific device node
 
 5. **Configuration Leakage**:
-   - Git configuration and other sensitive configs are copied
-   - Could expose personal information or credentials
+   - Git, OpenCode, and other selected configuration is copied
+   - Configuration may expose personal information or credentials
+
+6. **Persistent OpenCode State**:
+   - Sandboxed programs can modify or delete the live OpenCode data/history
+   - Persistence is intentional, but it is outside the disposable-home boundary
 
 ## Similar projects
 
 There are a ton of similar projects out there... a few:
 
-- https://github.com/bigattichouse/scratchpad 
+- https://github.com/bigattichouse/scratchpad
 - https://docs.anthropic.com/en/docs/claude-code/devcontainer
 - https://github.com/nikvdp/cco
 - https://github.com/RchGrav/claudebox
 
-There are many like it, but this one is mine. 
+There are many like it, but this one is mine.
 
 ## TODO / ideas
 
-- allow re-starting with a previous sandboxed environment to get presistent sessions
+- Allow restarting with a retained sandbox home to support persistent sessions.
