@@ -51,8 +51,13 @@ if ! NIX_CLOSURE=$(nix-store --query --requisites "$NIX_TOOLS_STORE_PATH"); then
 fi
 
 NIX_BINDS=(--dir /nix --dir /nix/store --dir /opt)
+declare -A NIX_CLOSURE_HASHES=()
 while IFS= read -r store_path; do
-    [ -n "$store_path" ] && NIX_BINDS+=(--ro-bind "$store_path" "$store_path")
+    if [ -n "$store_path" ]; then
+        NIX_BINDS+=(--ro-bind "$store_path" "$store_path")
+        store_hash=${store_path#/nix/store/}
+        NIX_CLOSURE_HASHES["${store_hash%%-*}"]=1
+    fi
 done <<< "$NIX_CLOSURE"
 NIX_BINDS+=(--ro-bind "$NIX_TOOLS_STORE_PATH" /opt/sandkasten-tools)
 
@@ -145,18 +150,31 @@ mkdir -p "$SANDBOX_HOME/julia"
 [ -d "$HOME/.config/git" ] && \
     cp -rL "$HOME/.config/git" "$SANDBOX_HOME/.config"
 # Julia configuration
-[ -d "$HOME/julia/dot-julia-config" ] && \
-    cp --remove-destination "$HOME/.julia/config/startup.jl" "$SANDBOX_HOME/.julia/config"
-[ -d "$HOME/julia/dot-julia-environments" ] && \
+if [ "$WITH_JULIA" = true ] && [ -d "$HOME/julia/dot-julia-environments" ]; then
     cp -rL "$HOME/julia/dot-julia-environments" "$SANDBOX_HOME/julia/"
+fi
 
-# ## Copied configuration must not depend on unmounted Nix store paths
+## Copied configuration must not depend on unmounted Nix store paths
 STORE_REFERENCE_FILES=$(grep -RFl --exclude-dir=.git -- '/nix/store/' "$SANDBOX_HOME" 2>/dev/null)
 if [ -n "$STORE_REFERENCE_FILES" ]; then
-    echo "Copied sandbox files contain Nix store references:" >&2
-    printf '%s\n' "$STORE_REFERENCE_FILES" >&2
-    echo "Replace those references or expose their packages through sandbox-tools.nix." >&2
-    exit 1
+    UNMOUNTED_STORE_REFERENCES=()
+    while IFS= read -r store_reference; do
+        store_hash=${store_reference##*/}
+        if [ -z "${NIX_CLOSURE_HASHES[$store_hash]+x}" ]; then
+            UNMOUNTED_STORE_REFERENCES+=("$store_reference")
+        fi
+    done < <(grep -RahoE --exclude-dir=.git '/nix/store/[0-9a-z]{32}' "$SANDBOX_HOME" 2>/dev/null | sort -u)
+
+    if [ "${#UNMOUNTED_STORE_REFERENCES[@]}" -gt 0 ]; then
+        echo "Copied sandbox files refer to unmounted Nix store paths:" >&2
+        printf '  %s\n' "${UNMOUNTED_STORE_REFERENCES[@]}" >&2
+        echo "Files containing Nix store references:" >&2
+        while IFS= read -r reference_file; do
+            printf '  %s\n' "$reference_file" >&2
+        done <<< "$STORE_REFERENCE_FILES"
+        echo "Replace those references or add their packages to sandbox-tools.nix." >&2
+        exit 1
+    fi
 fi
 
 ## Larger directories are copied on write (COW), if possible

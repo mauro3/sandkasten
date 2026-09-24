@@ -41,8 +41,8 @@ development tools come from the repository's pinned Nix flake.
   directories use `cp -rL` so Home Manager symlinks are dereferenced rather
   than left dangling.
 - After the initial copies, the launcher scans the sandbox home for literal
-  `/nix/store/` references. It refuses to launch if any copied file still
-  depends on a store path.
+  `/nix/store/` references. References whose store hash is in the mounted tools
+  closure are allowed; the launcher refuses unresolved store paths.
 - WezTerm configuration is patched after copying. A sandbox-specific Fish file
   sets the prompt, editor, graphics option, and API keys.
 - The generated Fish configuration contains `OPENAI_API_KEY` and

@@ -7,8 +7,15 @@
   profile updates should behave before implementing it.
 - [ ] Make project-path handling explicit. The launcher currently calls
   `realpath` before `mkdir`, so a nonexistent project argument is not created as
-  its comment suggests. Either require an existing directory with a clear error
-  or create it before resolving it.
+  its comment suggests. It also silently accepts multiple project arguments and
+  uses the last one. Require exactly zero or one project directory and either
+  require it to exist with a clear error or create it before resolving it.
+- [ ] Provide a minimal sandbox `/etc/passwd` and `/etc/group`, or otherwise
+  handle user lookup. Programs that call `getpwuid()` can currently report an
+  unknown user.
+- [ ] Correct stale launcher diagnostics: `openssl rand -hex 8` produces 16 hex
+  characters, and the `cp -r` snapshot fallback does not guarantee COW despite
+  the current message.
 - [ ] Clean up partially initialized homes and temporary directories when setup
   fails, including failures from the copied-file `/nix/store/` check.
 - [ ] Review copied local wrappers now that Nix provides `zathura`, `meld`, and
