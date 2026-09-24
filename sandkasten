@@ -290,6 +290,35 @@ echo "source ~/.config/fish/sandbox.fish" >> "$SANDBOX_HOME/.config/fish/config.
 # Wayland
 DISPLAY_BINDS=(--ro-bind "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY")
 
+## Hide host device categories that are not needed in the sandbox
+DEVICE_MASKS=(
+    --tmpfs /dev/snd
+    --tmpfs /dev/input
+    --tmpfs /dev/usb
+    --tmpfs /dev/disk
+    --tmpfs /dev/block
+    --tmpfs /dev/mapper
+    --tmpfs /dev/net
+    --tmpfs /dev/v4l
+    --tmpfs /dev/hidraw0
+    --tmpfs /dev/hidraw1
+    --tmpfs /dev/media0
+    --tmpfs /dev/media1
+    --tmpfs /dev/video0
+    --tmpfs /dev/video1
+    --tmpfs /dev/video2
+    --tmpfs /dev/video3
+    --tmpfs /dev/watchdog
+    --tmpfs /dev/watchdog0
+    --tmpfs /dev/rfkill
+    --tmpfs /dev/snapshot
+    --tmpfs /dev/vboxdrv
+    --tmpfs /dev/vboxdrvu
+    --tmpfs /dev/vboxnetctl
+    --tmpfs /dev/vboxusb
+    --tmpfs /dev/vfio
+)
+
 ## Add DRI access permissions for GPU
 GPU_BINDS=()
 for dev in /dev/dri/renderD* /dev/dri/card*; do
@@ -306,6 +335,23 @@ if [ "$WITH_JULIA" = true ]; then
 fi
 SANDBOX_PATH="$SANDBOX_PATH:/usr/local/bin:/usr/bin:/bin"
 SANDBOX_LANG=${LANG:-C.UTF-8}
+SANDBOX_ENV=(
+    --clearenv
+    --setenv HOME "/home/$USER"
+    --setenv USER "$USER"
+    --setenv LOGNAME "$USER"
+    --setenv SHELL /usr/bin/fish
+    --setenv LANG "$SANDBOX_LANG"
+    --setenv WAYLAND_DISPLAY "$WAYLAND_DISPLAY"
+    --setenv XDG_RUNTIME_DIR "$XDG_RUNTIME_DIR"
+    --setenv XDG_SESSION_TYPE wayland
+    --setenv PATH "$SANDBOX_PATH"
+    --setenv GIT_OPTIONAL_LOCKS 0
+    --setenv OPENAI_API_KEY "$OPENAI_API_KEY"
+    --setenv OPENAI_API_BASE "$OPENAI_API_BASE"
+    --setenv ANTHROPIC_API_KEY "$ANTHROPIC_API_KEY"
+    --setenv TMPDIR /tmp
+)
 
 ## Ensure real opencode data directory exists (needed for bind-mount)
 mkdir -p "$HOME/.local/share/opencode"
@@ -338,34 +384,7 @@ bwrap --unshare-user-try \
       `# === Device access (blacklist approach) ===` \
       `# Use --dev for proper devtmpfs, then hide unwanted categories with --tmpfs` \
       --dev /dev \
-      `# Hide audio/video/USB devices` \
-      --tmpfs /dev/snd \
-      --tmpfs /dev/input \
-      --tmpfs /dev/usb \
-      --tmpfs /dev/disk \
-      --tmpfs /dev/block \
-      --tmpfs /dev/mapper \
-      --tmpfs /dev/net \
-      --tmpfs /dev/v4l \
-      --tmpfs /dev/hidraw0 \
-      --tmpfs /dev/hidraw1 \
-      --tmpfs /dev/media0 \
-      --tmpfs /dev/media1 \
-      --tmpfs /dev/video0 \
-      --tmpfs /dev/video1 \
-      --tmpfs /dev/video2 \
-      --tmpfs /dev/video3 \
-      `# Hide system hardware access` \
-      --tmpfs /dev/watchdog \
-      --tmpfs /dev/watchdog0 \
-      --tmpfs /dev/rfkill \
-      --tmpfs /dev/snapshot \
-      `# Hide virtualization devices` \
-      --tmpfs /dev/vboxdrv \
-      --tmpfs /dev/vboxdrvu \
-      --tmpfs /dev/vboxnetctl \
-      --tmpfs /dev/vboxusb \
-      --tmpfs /dev/vfio \
+      "${DEVICE_MASKS[@]}" \
       `# === GPU access (whitelisted DRI devices) ===` \
       "${GPU_BINDS[@]}" \
       `# === Sandbox directories ===` \
@@ -383,21 +402,7 @@ bwrap --unshare-user-try \
       `# === Read-only Git metadata ===` \
       "${GIT_BINDS[@]}" \
       `# === Environment variables ===` \
-      --clearenv \
-      --setenv HOME "/home/$USER" \
-      --setenv USER "$USER" \
-      --setenv LOGNAME "$USER" \
-      --setenv SHELL /usr/bin/fish \
-      --setenv LANG "$SANDBOX_LANG" \
-      --setenv WAYLAND_DISPLAY "$WAYLAND_DISPLAY" \
-      --setenv XDG_RUNTIME_DIR "$XDG_RUNTIME_DIR" \
-      --setenv XDG_SESSION_TYPE wayland \
-      --setenv PATH "$SANDBOX_PATH" \
-      --setenv GIT_OPTIONAL_LOCKS 0 \
-      --setenv OPENAI_API_KEY "$OPENAI_API_KEY" \
-      --setenv OPENAI_API_BASE "$OPENAI_API_BASE" \
-      --setenv ANTHROPIC_API_KEY "$ANTHROPIC_API_KEY" \
-      --setenv TMPDIR "/tmp" \
+      "${SANDBOX_ENV[@]}" \
       `# === Launch WezTerm with D-Bus confined inside the sandbox ===` \
       /usr/bin/dbus-run-session -- /usr/bin/wezterm start --cwd "$PROJECT_ROOT"
 
