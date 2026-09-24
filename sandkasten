@@ -17,7 +17,7 @@ create_cow_snapshot() {
             echo "BTRFS snapshot created successfully" >&2
         else
             echo "BTRFS snapshot failed, copying with COW if available..." >&2
-            cp -r "$SOURCE_DIR" "$DEST_DIR"
+            cp -r --reflink=auto "$SOURCE_DIR" "$DEST_DIR"
         fi
     else
         mkdir -p "$DEST_DIR"
@@ -63,6 +63,7 @@ NIX_BINDS+=(--ro-bind "$NIX_TOOLS_STORE_PATH" /opt/sandkasten-tools)
 
 ## Parse arguments 
 WITH_JULIA=true
+WITH_GPU=false
 PROJECT_ROOT=""
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -70,9 +71,13 @@ while [[ $# -gt 0 ]]; do
             WITH_JULIA=false
             shift
             ;;
+        --gpu)
+            WITH_GPU=true
+            shift
+            ;;
         -*)
             echo "Unknown option $1"
-            echo "Usage: $0 [--no-julia] [project_directory]"
+            echo "Usage: $0 [--no-julia] [--gpu] [project_directory]"
             exit 1
             ;;
         *)
@@ -115,7 +120,7 @@ done < <(find "$PROJECT_ROOT" -name .git -print0 -prune)
 ## Create sandbox directory in cache with date and random string
 CACHE_DIR="$HOME/.cache/sandkasten"
 mkdir -p "$CACHE_DIR"
-RANDOM_SUFFIX=$(openssl rand -hex 8)  # 8-character hex string
+RANDOM_SUFFIX=$(openssl rand -hex 8)  # 16-character hex string
 SANDBOX_HOME="$CACHE_DIR/$(date +%Y-%m-%d)_$RANDOM_SUFFIX"
 mkdir -p "$SANDBOX_HOME"
 echo "Sandbox home: $SANDBOX_HOME"
@@ -260,7 +265,20 @@ if [ -f "$SANDBOX_HOME/.config/wezterm/wezterm.lua" ]; then
   sed -i 's/-- config.use_fancy_tab_bar = false/config.use_fancy_tab_bar = false/' "$SANDBOX_HOME/.config/wezterm/wezterm.lua"
   sed -i 's/-- config.colors.tab_bar = { background = "#9C923C" }/config.colors.tab_bar = { background = "#9C923C" }/' "$SANDBOX_HOME/.config/wezterm/wezterm.lua"
   sed -i "s|-- config.default_prog = { '/usr/bin/fish' }|config.default_prog = { '/usr/bin/fish' }|" "$SANDBOX_HOME/.config/wezterm/wezterm.lua"
+  if [ "$WITH_GPU" = false ]; then
+    sed -i "/^return config$/i config.front_end = 'Software'" "$SANDBOX_HOME/.config/wezterm/wezterm.lua"
+  fi
+elif [ "$WITH_GPU" = false ]; then
+  printf "return { front_end = 'Software' }\n" > "$SANDBOX_HOME/.config/wezterm/wezterm.lua"
 fi
+
+if [ "$WITH_GPU" = true ]; then
+    FISH_GRAPHICS_CONFIG="# GPU rendering enabled by the launcher"
+else
+    FISH_GRAPHICS_CONFIG="# Use software rendering for sandboxed graphical programs
+set -x LIBGL_ALWAYS_SOFTWARE \"1\""
+fi
+
 # Create sandbox-specific fish configuration
 cat > "$SANDBOX_HOME/.config/fish/sandbox.fish" <<EOF
 # Sandbox-specific Fish configuration
@@ -277,8 +295,7 @@ set -x EDITOR hx
 set -x OPENAI_API_KEY "$OPENAI_API_KEY"
 set -x ANTHROPIC_API_KEY "$ANTHROPIC_API_KEY"
 
-# Graphics configuration for Julia
-set -x LIBGL_ALWAYS_SOFTWARE "1"
+$FISH_GRAPHICS_CONFIG
 
 # Welcome message
 echo "🔒 Sandboxed Environment: $PROJECT_ROOT 🔒"
@@ -321,12 +338,14 @@ DEVICE_MASKS=(
 
 ## Add DRI access permissions for GPU
 GPU_BINDS=()
-for dev in /dev/dri/renderD* /dev/dri/card*; do
-  if [ -e "$dev" ]; then
-    echo "Binding DRI device: $dev"
-    GPU_BINDS+=(--dev-bind "$dev" "$dev")
-  fi
-done
+if [ "$WITH_GPU" = true ]; then
+    for dev in /dev/dri/renderD* /dev/dri/card*; do
+        if [ -e "$dev" ]; then
+            echo "Binding DRI device: $dev"
+            GPU_BINDS+=(--dev-bind "$dev" "$dev")
+        fi
+    done
+fi
 
 ## Use only explicitly exposed tools and Fedora system paths
 SANDBOX_PATH="/opt/sandkasten-tools/bin:/home/$USER/.local/bin:/home/$USER/.cargo/bin"
@@ -363,10 +382,15 @@ echo "Launching sandboxed WezTerm..."
 # We use --dev to get proper devtmpfs with all infrastructure (symlinks, PTY support, etc.),
 # then use --tmpfs to hide unwanted device categories. See create_cow_snapshot comment for details.
 # To debug missing device access: strace -f -e trace=openat ./sandkasten 2>&1 | grep -E "/dev.*ENOENT"
-bwrap --unshare-user-try \
+bwrap --unshare-user \
+      `# Some browsers require nested user namespaces; comment this out if needed` \
+      --disable-userns \
       --unshare-pid \
+      --unshare-ipc \
       --unshare-uts \
       --unshare-cgroup \
+      --new-session \
+      --die-with-parent \
       `# === Read-only system bindings ===` \
       --ro-bind /usr /usr \
       --ro-bind /bin /bin \

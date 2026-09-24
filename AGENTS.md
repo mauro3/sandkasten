@@ -67,12 +67,15 @@ development tools come from the repository's pinned Nix flake.
   data and history persist across sessions. This is intentional host state, not
   part of the disposable home.
 - `~/.julia`, `~/.juliaup`, and `~/.cache/Tectonic` use writable BTRFS snapshots
-  when their source is a subvolume. Snapshot failure falls back to `cp -r`; an
-  absent source becomes an empty directory.
+  when their source is a subvolume. Snapshot failure falls back to
+  `cp -r --reflink=auto`; an absent source becomes an empty directory.
 - Known Home Manager handling fixes `~/.julia/config/startup.jl` after the Julia
   snapshot.
 - `--no-julia` skips the Julia and Juliaup snapshots and removes Juliaup from
   `PATH`. Tectonic cache handling still runs.
+- GPU access is disabled by default. `--gpu` passes through selected DRI devices,
+  leaves the copied WezTerm renderer unchanged, and does not set
+  `LIBGL_ALWAYS_SOFTWARE` in the generated Fish configuration.
 - Sandbox `/tmp` is backed by a dedicated host directory named
   `/tmp/sandkasten.tmp.*`.
 - On exit, the launcher offers to delete the sandbox home and temporary
@@ -82,13 +85,19 @@ development tools come from the repository's pinned Nix flake.
 ## Isolation And Host Integration
 
 - System directories and selected resources are mounted read-only.
-- PID, UTS, and cgroup namespaces are unshared. User namespace isolation uses
-  `--unshare-user-try` and can fall back if unavailable.
+- PID, IPC, UTS, cgroup, and user namespaces are unshared. User namespace
+  isolation is mandatory, and nested user namespaces are disabled. Some
+  browsers and container tools may require removing `--disable-userns`.
+- `--new-session` prevents controlling-terminal input injection, and
+  `--die-with-parent` terminates sandbox processes if the launcher dies.
 - The host network namespace is shared, including internet, LAN, and localhost
   services.
 - WezTerm is launched through `dbus-run-session` inside Bubblewrap. The private
   bus daemon and any D-Bus-activated services therefore remain in the sandbox.
-- Wayland is required. The Wayland socket and selected DRI devices are exposed.
+- FUSE, host desktop portals, PipeWire, and RealtimeKit are not exposed;
+  related warnings from private desktop services are expected.
+- Wayland is required. The Wayland socket is exposed; selected DRI devices are
+  exposed only with `--gpu`.
 - Device isolation uses a blacklist over `/dev`; it is not a strong hardware
   security boundary.
 - `OPENAI_API_KEY`, `OPENAI_API_BASE`, and `ANTHROPIC_API_KEY` are passed into
@@ -125,6 +134,7 @@ Host-only manual validation:
 ```bash
 nix build .#sandbox-tools -o .sandkasten-nix-profile
 ./sandkasten --no-julia /path/to/test-project
+./sandkasten --gpu /path/to/test-project
 ./sandkasten /path/to/test-project
 ```
 

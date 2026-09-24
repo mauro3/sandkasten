@@ -10,9 +10,6 @@
   its comment suggests. It also silently accepts multiple project arguments and
   uses the last one. Require exactly zero or one project directory and either
   require it to exist with a clear error or create it before resolving it.
-- [ ] Correct stale launcher diagnostics: `openssl rand -hex 8` produces 16 hex
-  characters, and the `cp -r` snapshot fallback does not guarantee COW despite
-  the current message.
 - [ ] Clean up partially initialized homes and temporary directories when setup
   fails, including failures from the copied-file `/nix/store/` check.
 - [ ] Review copied local wrappers now that Nix provides `zathura`, `meld`, and
@@ -21,14 +18,47 @@
 - [ ] Verify that the `julia-mono` package is discoverable by Fedora Fontconfig
   from `/opt/sandkasten-tools`; add explicit font configuration if required.
 
+## Security Hardening
+
+- [ ] Validate symlink targets before using `cp -rL`. Dereferencing is required
+  for Home Manager files, but a nested link to an unrelated host path can copy
+  data outside the intended configuration allowlist into the network-enabled
+  sandbox. Permit only expected source trees and `/nix/store` targets.
+- [ ] Stop writing `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` into
+  `sandbox.fish`. Pass them only through the process environment so retained
+  sandbox homes do not contain plaintext API keys.
+- [ ] Create sandbox homes, generated secret-bearing files, and host-side
+  temporary directories with private permissions. In particular, replace the
+  ordinary `/tmp/sandkasten.tmp.*` `mkdir` with `mktemp -d` or mode `0700`, and
+  consider a launcher-wide `umask 077`.
+- [ ] Make the generated `.sandbox-etc` files inaccessible through their
+  writable sandbox-home source path if immutable identity files are desired.
+  They are mounted read-only at `/etc`, but remain reachable under the writable
+  sandbox home.
+- [ ] Consider a seccomp policy if containment of malicious code becomes a
+  goal. Filesystem and namespace isolation do not filter the syscall attack
+  surface by themselves.
+- [ ] Consider limits for process count, CPU, memory, file size, open file
+  descriptors, and writable storage. Namespaces do not prevent host resource
+  exhaustion or a runaway process from filling the host filesystem.
+
 ## Validation
 
-- [ ] Run host smoke tests for both `./sandkasten --no-julia` and the default
-  Julia-enabled mode.
+- [ ] Run host smoke tests for `./sandkasten --no-julia`, `./sandkasten --gpu`,
+  and the default Julia-enabled software-rendered mode.
 - [ ] Confirm an unrelated `/nix/store/...` path and the Nix daemon socket are
   inaccessible inside the sandbox.
 - [ ] Confirm copied configuration is writable without changing host files,
   Julia/Tectonic changes remain disposable, and OpenCode state persists.
+- [ ] Verify `env` inside the sandbox contains only the intended variables.
+- [ ] Verify cleanup rejects absolute outside paths, traversal, and symlink
+  targets; separately decide how cleanup should detect active sandbox homes.
+- [ ] Verify host IPC objects are inaccessible.
+- [ ] Verify terminal isolation and parent-death behavior.
+- [ ] Verify `.git` is read-only for ordinary repositories, linked worktrees,
+  and submodules.
+- [ ] Verify retained homes and `/tmp/sandkasten.tmp.*` are not readable by
+  other local users after private permissions are implemented.
 
 ## Flatpak Support - Deferred
 

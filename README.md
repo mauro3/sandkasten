@@ -40,6 +40,21 @@ sandkasten --no-julia
 This skips the Julia depot and Juliaup snapshots and omits Juliaup from the
 sandbox `PATH`. It does not disable the Tectonic cache snapshot.
 
+GPU access and hardware rendering are disabled by default. Enable the existing
+DRI device passthrough and use the normal WezTerm renderer when needed with:
+
+```bash
+sandkasten --gpu
+```
+
+The options can be combined, for example `sandkasten --no-julia --gpu`.
+
+The private desktop session may log warnings about FUSE, desktop portal
+fallbacks, PipeWire, or RealtimeKit. These integrations are intentionally not
+exposed by default. If the WezTerm window works and the launcher reports
+`bwrap exited with code: 0`, those messages do not indicate a failed sandbox
+launch.
+
 After all sandbox sessions have exited, remove every retained sandbox home and
 its matching temporary directory with:
 
@@ -218,10 +233,14 @@ profile generations and give up their rollback options.
    including linked worktree and submodule metadata, while working-tree files
    remain writable. Git inspection works, but commits, staging, ref changes,
    hook changes, and repository configuration changes are blocked.
-5. **Session launch:** Creates PID, UTS, cgroup, and attempted user namespace
-   isolation, exposes Wayland and selected DRI devices, and launches WezTerm
+5. **Session launch:** Creates PID, IPC, UTS, cgroup, and mandatory user
+   namespace isolation, starts a new terminal session, and terminates sandbox
+   processes if the launcher dies. It exposes Wayland and launches WezTerm
    through `dbus-run-session`. The private D-Bus daemon and any services it
-   activates run inside the Bubblewrap sandbox.
+   activates run inside the Bubblewrap sandbox. GPU access is disabled and
+   WezTerm uses software rendering unless `--gpu` is passed. Nested user
+   namespaces are disabled; this may need to be relaxed for some browsers or
+   container tools.
 6. **Cleanup:** Offers to remove the disposable home and temporary directory
    when WezTerm exits. Declining keeps them until `sandkasten-cleanup` is run;
    there is currently no option to resume a retained home.
@@ -232,9 +251,12 @@ profile generations and give up their rollback options.
 - **Filesystem isolation:** System files and the selected Nix closure are
   read-only; the rest of the host home is not mounted.
 - **Process isolation:** A separate PID namespace hides host processes.
-- **Namespace isolation:** UTS and cgroup namespaces are unshared. A user
-  namespace is attempted with `--unshare-user-try` and may be unavailable on
-  some systems.
+- **Namespace isolation:** IPC, UTS, cgroup, and user namespaces are unshared.
+  Launch fails if a user namespace cannot be created, and nested user
+  namespaces are disabled inside the sandbox.
+- **Terminal and lifecycle isolation:** A new terminal session prevents
+  controlling-terminal input injection, and sandbox processes are killed if
+  the launcher dies.
 - **D-Bus isolation:** Applications use a private session bus rather than the
   host session bus. The bus daemon and activated services run inside the
   sandbox.
@@ -257,8 +279,9 @@ profile generations and give up their rollback options.
 - **Project Directory**: Direct read/write access to your project files
 - **OpenCode State**: Direct read/write access to the host OpenCode data and
   history directory
-- **GPU/Hardware**: Selected DRI devices are passed through; device hiding uses
-  a blacklist and should not be treated as a strong hardware boundary
+- **GPU/Hardware with `--gpu`**: Selected DRI devices are passed through; device
+  hiding uses a blacklist and should not be treated as a strong hardware
+  boundary
 - **API Keys**: `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` are passed through and
   written into the disposable Fish configuration
 
@@ -283,7 +306,7 @@ anything readable inside the sandbox to be exfiltrated.
    - Retained sandbox homes contain the generated Fish file with these keys
 
 4. **Hardware Access**:
-   - Passed-through GPU devices could potentially be exploited
+   - GPU devices passed through with `--gpu` could potentially be exploited
    - The device blacklist may not cover every host-specific device node
 
 5. **Configuration Leakage**:
@@ -307,5 +330,4 @@ There are many like it, but this one is mine.
 
 ## Future Work
 
-See [TODOs.md](TODOs.md) for the general backlog and
-[todo-scurity.md](todo-scurity.md) for security hardening work.
+See [TODOs.md](TODOs.md) for the backlog, including security hardening work.
