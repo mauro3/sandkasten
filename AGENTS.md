@@ -37,6 +37,10 @@ development tools come from the repository's pinned Nix flake.
 - `$HOME/.cache/sandkasten/YYYY-MM-DD_XXXXXXXXXXXXXXXX/` is the disposable
   sandbox home (`$SANDBOX_HOME`). The random suffix comes from
   `openssl rand -hex 8` and is 16 hexadecimal characters.
+- Minimal `passwd`, `group`, and `machine-id` files are generated under
+  `$SANDBOX_HOME/.sandbox-etc` and mounted read-only at `/etc`. This lets D-Bus
+  and other applications resolve the sandbox user without exposing the host
+  account database or machine ID.
 - Selected host files are copied directly into the sandbox home. Configuration
   directories use `cp -rL` so Home Manager symlinks are dereferenced rather
   than left dangling.
@@ -78,7 +82,8 @@ development tools come from the repository's pinned Nix flake.
   `--unshare-user-try` and can fall back if unavailable.
 - The host network namespace is shared, including internet, LAN, and localhost
   services.
-- A private D-Bus session is started for the sandbox.
+- WezTerm is launched through `dbus-run-session` inside Bubblewrap. The private
+  bus daemon and any D-Bus-activated services therefore remain in the sandbox.
 - Wayland is required. The Wayland socket and selected DRI devices are exposed.
 - Device isolation uses a blacklist over `/dev`; it is not a strong hardware
   security boundary.

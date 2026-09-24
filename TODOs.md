@@ -10,9 +10,6 @@
   its comment suggests. It also silently accepts multiple project arguments and
   uses the last one. Require exactly zero or one project directory and either
   require it to exist with a clear error or create it before resolving it.
-- [ ] Provide a minimal sandbox `/etc/passwd` and `/etc/group`, or otherwise
-  handle user lookup. Programs that call `getpwuid()` can currently report an
-  unknown user.
 - [ ] Correct stale launcher diagnostics: `openssl rand -hex 8` produces 16 hex
   characters, and the `cp -r` snapshot fallback does not guarantee COW despite
   the current message.
@@ -23,8 +20,6 @@
   wrapper should override the Nix command.
 - [ ] Verify that the `julia-mono` package is discoverable by Fedora Fontconfig
   from `/opt/sandkasten-tools`; add explicit font configuration if required.
-- [ ] Reconsider writing API keys into `sandbox.fish`. Environment-only passing
-  would avoid leaving keys in retained sandbox homes.
 
 ## Validation
 

@@ -198,7 +198,9 @@ profile generations and give up their rollback options.
 
 1. **Sandbox creation:** Creates a disposable home at
    `~/.cache/sandkasten/YYYY-MM-DD_XXXXXXXXXXXXXXXX` and a matching host-side
-   `/tmp/sandkasten.tmp.*` directory that becomes the sandbox `/tmp`.
+   `/tmp/sandkasten.tmp.*` directory that becomes the sandbox `/tmp`. It also
+   generates minimal `passwd`, `group`, and `machine-id` files for the sandbox
+   instead of exposing the host account database or machine ID.
 2. **Configuration copying:** Copies selected Fish, WezTerm, Zathura, Helix,
    Vale, OpenCode, and Git configuration and selected local scripts. Directory
    copies dereference Home Manager symlinks so they remain usable and writable
@@ -214,8 +216,9 @@ profile generations and give up their rollback options.
    persist between sessions. Julia, Juliaup, and Tectonic use disposable
    writable snapshots or copies instead.
 5. **Session launch:** Creates PID, UTS, cgroup, and attempted user namespace
-   isolation, starts a private D-Bus session, exposes Wayland and selected DRI
-   devices, and launches `/usr/bin/wezterm`.
+   isolation, exposes Wayland and selected DRI devices, and launches WezTerm
+   through `dbus-run-session`. The private D-Bus daemon and any services it
+   activates run inside the Bubblewrap sandbox.
 6. **Cleanup:** Offers to remove the disposable home and temporary directory
    when WezTerm exits. Declining keeps them until `sandkasten-cleanup` is run;
    there is currently no option to resume a retained home.
@@ -230,7 +233,8 @@ profile generations and give up their rollback options.
   namespace is attempted with `--unshare-user-try` and may be unavailable on
   some systems.
 - **D-Bus isolation:** Applications use a private session bus rather than the
-  host session bus.
+  host session bus. The bus daemon and activated services run inside the
+  sandbox.
 
 ### What's Isolated
 - System directories (`/usr`, `/bin`, `/lib`) are read-only
@@ -297,4 +301,5 @@ There are many like it, but this one is mine.
 
 ## Future Work
 
-See [TODOs.md](TODOs.md) for the current backlog and deferred ideas.
+See [TODOs.md](TODOs.md) for the general backlog and
+[todo-scurity.md](todo-scurity.md) for security hardening work.
