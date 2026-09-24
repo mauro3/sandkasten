@@ -59,6 +59,10 @@ development tools come from the repository's pinned Nix flake.
 
 - `$PROJECT_ROOT` is resolved with `realpath` and bind-mounted read-write at its
   normal absolute path.
+- `.git` entries and resolved Git/common directories are over-mounted read-only
+  after the project bind. This covers ordinary repositories, nested repos,
+  submodules, and linked worktrees. `GIT_OPTIONAL_LOCKS=0` keeps inspection
+  commands from attempting optional index writes.
 - `$HOME/.local/share/opencode` is bind-mounted live and read-write so OpenCode
   data and history persist across sessions. This is intentional host state, not
   part of the disposable home.
@@ -89,6 +93,8 @@ development tools come from the repository's pinned Nix flake.
   security boundary.
 - `OPENAI_API_KEY`, `OPENAI_API_BASE`, and `ANTHROPIC_API_KEY` are passed into
   the sandbox.
+- Bubblewrap uses `--clearenv`; every retained environment variable must be
+  explicitly set by the launcher.
 - No `--hostname` flag is passed to `bwrap`; this may affect `flatpak-spawn`.
 
 ## Implementation Style

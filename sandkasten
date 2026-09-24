@@ -87,6 +87,31 @@ PROJECT_ROOT=$(realpath "${PROJECT_ROOT:-$(pwd)}")
 echo "Setting up sandbox for: $PROJECT_ROOT"
 mkdir -p "$PROJECT_ROOT" # Ensure the project directory exists
 
+## Protect Git metadata while leaving working-tree files writable
+GIT_BINDS=()
+declare -A GIT_BIND_PATHS=()
+while IFS= read -r -d '' git_entry; do
+    if [ -L "$git_entry" ]; then
+        echo "Refusing symlinked Git metadata path: $git_entry" >&2
+        exit 1
+    fi
+
+    if [ -z "${GIT_BIND_PATHS[$git_entry]+x}" ]; then
+        GIT_BINDS+=(--ro-bind "$git_entry" "$git_entry")
+        GIT_BIND_PATHS["$git_entry"]=1
+    fi
+
+    git_worktree=$(dirname "$git_entry")
+    git_dir=$(git -C "$git_worktree" rev-parse --absolute-git-dir 2>/dev/null || true)
+    git_common_dir=$(git -C "$git_worktree" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
+    for git_path in "$git_dir" "$git_common_dir"; do
+        if [ -e "$git_path" ] && [ -z "${GIT_BIND_PATHS[$git_path]+x}" ]; then
+            GIT_BINDS+=(--ro-bind "$git_path" "$git_path")
+            GIT_BIND_PATHS["$git_path"]=1
+        fi
+    done
+done < <(find "$PROJECT_ROOT" -name .git -print0 -prune)
+
 ## Create sandbox directory in cache with date and random string
 CACHE_DIR="$HOME/.cache/sandkasten"
 mkdir -p "$CACHE_DIR"
@@ -280,6 +305,7 @@ if [ "$WITH_JULIA" = true ]; then
     SANDBOX_PATH="$SANDBOX_PATH:/home/$USER/.juliaup/bin"
 fi
 SANDBOX_PATH="$SANDBOX_PATH:/usr/local/bin:/usr/bin:/bin"
+SANDBOX_LANG=${LANG:-C.UTF-8}
 
 ## Ensure real opencode data directory exists (needed for bind-mount)
 mkdir -p "$HOME/.local/share/opencode"
@@ -354,11 +380,20 @@ bwrap --unshare-user-try \
       "${COW_BINDS[@]}" \
       `# === Project directory ===` \
       --bind "$PROJECT_ROOT" "$PROJECT_ROOT" \
+      `# === Read-only Git metadata ===` \
+      "${GIT_BINDS[@]}" \
       `# === Environment variables ===` \
+      --clearenv \
       --setenv HOME "/home/$USER" \
+      --setenv USER "$USER" \
+      --setenv LOGNAME "$USER" \
+      --setenv SHELL /usr/bin/fish \
+      --setenv LANG "$SANDBOX_LANG" \
       --setenv WAYLAND_DISPLAY "$WAYLAND_DISPLAY" \
       --setenv XDG_RUNTIME_DIR "$XDG_RUNTIME_DIR" \
+      --setenv XDG_SESSION_TYPE wayland \
       --setenv PATH "$SANDBOX_PATH" \
+      --setenv GIT_OPTIONAL_LOCKS 0 \
       --setenv OPENAI_API_KEY "$OPENAI_API_KEY" \
       --setenv OPENAI_API_BASE "$OPENAI_API_BASE" \
       --setenv ANTHROPIC_API_KEY "$ANTHROPIC_API_KEY" \

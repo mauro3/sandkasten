@@ -214,7 +214,10 @@ profile generations and give up their rollback options.
 4. **Writable state:** Bind-mounts the project read-write. OpenCode data and
    history at `~/.local/share/opencode` are also bind-mounted read-write so they
    persist between sessions. Julia, Juliaup, and Tectonic use disposable
-   writable snapshots or copies instead.
+   writable snapshots or copies instead. Git metadata is over-mounted read-only,
+   including linked worktree and submodule metadata, while working-tree files
+   remain writable. Git inspection works, but commits, staging, ref changes,
+   hook changes, and repository configuration changes are blocked.
 5. **Session launch:** Creates PID, UTS, cgroup, and attempted user namespace
    isolation, exposes Wayland and selected DRI devices, and launches WezTerm
    through `dbus-run-session`. The private D-Bus daemon and any services it
@@ -235,6 +238,8 @@ profile generations and give up their rollback options.
 - **D-Bus isolation:** Applications use a private session bus rather than the
   host session bus. The bus daemon and activated services run inside the
   sandbox.
+- **Environment isolation:** Bubblewrap clears the inherited host environment
+  and sets only the variables explicitly required by the sandbox.
 
 ### What's Isolated
 - System directories (`/usr`, `/bin`, `/lib`) are read-only
@@ -244,6 +249,7 @@ profile generations and give up their rollback options.
   than live host binds
 - Sandbox `/tmp` uses a dedicated host directory
 - Copied configuration can be modified without changing its host source
+- Git metadata is read-only while project working-tree files remain writable
 
 ### What's NOT Isolated
 - **Network Access**: The host network namespace is shared, including internet,
