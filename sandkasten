@@ -168,6 +168,7 @@ echo "Temp-dir: $SANDBOX_TEMP"
 # Note that configs are copied such that they can be modified, as some are
 # Configuration directories
 mkdir -p "$SANDBOX_HOME/.config/fish"
+mkdir -p "$SANDBOX_HOME/.config/fontconfig/conf.d"
 mkdir -p "$SANDBOX_HOME/.config/wezterm"
 mkdir -p "$SANDBOX_HOME/.config/zathura"
 # Local directories
@@ -179,6 +180,16 @@ mkdir -p "$SANDBOX_HOME/.cargo/bin"
 mkdir -p "$SANDBOX_HOME/julia"
 
 ## Copy essential configuration files
+# Fontconfig sees this user configuration through /etc/fonts/conf.d/50-user.conf.
+printf '%s\n' \
+    '<?xml version="1.0"?>' \
+    '<fontconfig>' \
+    '  <dir>/opt/sandkasten-tools/share/fonts</dir>' \
+    '</fontconfig>' \
+    > "$SANDBOX_HOME/.config/fontconfig/conf.d/10-sandkasten-fonts.conf"
+[ -f "$HOME/.config/fontconfig/conf.d/52-hm-default-fonts.conf" ] && \
+    cp -L "$HOME/.config/fontconfig/conf.d/52-hm-default-fonts.conf" \
+        "$SANDBOX_HOME/.config/fontconfig/conf.d/"
 # Shell configuration
 [ -f "$HOME/.config/fish/config.fish" ] && \
     cp "$HOME/.config/fish/config.fish" "$SANDBOX_HOME/.config/fish/"
