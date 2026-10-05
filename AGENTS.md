@@ -64,8 +64,10 @@ development tools come from the repository's pinned Nix flake.
   submodules, and linked worktrees. `GIT_OPTIONAL_LOCKS=0` keeps inspection
   commands from attempting optional index writes.
 - `$HOME/.local/share/opencode` is bind-mounted live and read-write so OpenCode
-  data and history persist across sessions. This is intentional host state, not
-  part of the disposable home.
+  data and history persist across sessions. `$HOME/.pi` is also bind-mounted
+  live and read-write so Pi credentials, settings, extensions, MCP credentials,
+  and session history persist across sessions. These are intentional host state,
+  not part of the disposable home.
 - `~/.julia`, `~/.juliaup`, and `~/.cache/Tectonic` use writable BTRFS snapshots
   when their source is a subvolume. Snapshot failure falls back to
   `cp -r --reflink=auto`; an absent source becomes an empty directory.
@@ -117,7 +119,7 @@ development tools come from the repository's pinned Nix flake.
   backtick-comment form: `` `# === Section ===` ``.
 - Send informational and error output to stderr where appropriate.
 - Do not expose all of `/nix`, the Nix daemon, or host Home Manager generations.
-- Do not change the live OpenCode bind or disposable Julia/Tectonic behavior
+- Do not change the live OpenCode/Pi binds or disposable Julia/Tectonic behavior
   without treating it as a security and persistence decision.
 
 ## Testing And Validation
@@ -139,7 +141,7 @@ nix build .#sandbox-tools -o .sandkasten-nix-profile
 ```
 
 Inside the sandbox, verify selected Nix commands, Fedora Fish/WezTerm/Helix,
-configuration loading, OpenCode persistence, Julia behavior, and that an
+configuration loading, OpenCode and Pi persistence, Julia behavior, and that an
 unrelated `/nix/store/...` path and the Nix daemon are inaccessible.
 
 ## Relevant Paths

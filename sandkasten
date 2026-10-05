@@ -3,7 +3,7 @@
 # Run development environment in sandbox by spawning a wezterm session. Tools include:
 # - Julia lang
 # - Helix editor
-# - opencode AI-agentic coder
+# - opencode and pi AI-agentic coders
 
 # === HELPER FUNCTIONS ===
 
@@ -383,8 +383,9 @@ SANDBOX_ENV=(
     --setenv TMPDIR /tmp
 )
 
-## Ensure real opencode data directory exists (needed for bind-mount)
+## Ensure real AI-agent state directories exist (needed for bind-mounts)
 mkdir -p "$HOME/.local/share/opencode"
+mkdir -p "$HOME/.pi"
 
 ## Launch sandbox
 echo "Launching sandboxed WezTerm..."
@@ -428,6 +429,7 @@ bwrap --unshare-user \
       --bind "$SANDBOX_HOME" "/home/$USER" \
       `# === Preserved real directories (bind-mounted from host) ===` \
       --bind "$HOME/.local/share/opencode" "/home/$USER/.local/share/opencode" \
+      --bind "$HOME/.pi" "/home/$USER/.pi" \
       `# === Display server (Wayland) ===` \
       "${DISPLAY_BINDS[@]}" \
       `# === COW snapshots (Julia, Tectonic, etc.) ===` \

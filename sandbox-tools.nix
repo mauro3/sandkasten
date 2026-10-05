@@ -11,8 +11,6 @@ pkgs.buildEnv {
 
     (aspellWithDicts (d: with d; [
       en
-      en-computers
-      # en-science # unfree license
       de
     ]))
 
@@ -30,6 +28,7 @@ pkgs.buildEnv {
     markdown-oxide
     marksman
     opencode
+    pi-coding-agent
     pdftk
     tectonic
     vale

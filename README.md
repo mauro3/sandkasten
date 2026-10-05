@@ -17,7 +17,7 @@ started from the terminal.
 
 #### Health warning
 The setup is geared towards Julia coding and LaTeX writing with an AI command
-line agent such as OpenCode. It is intentionally opinionated and copies selected
+line agent such as OpenCode or Pi. It is intentionally opinionated and copies selected
 files from the host configuration. Other projects may be more general or more
 plug-and-play; some are linked below.
 
@@ -227,8 +227,9 @@ profile generations and give up their rollback options.
    and exposes the profile as `/opt/sandkasten-tools`. The Nix daemon and the
    rest of the store are not mounted.
 4. **Writable state:** Bind-mounts the project read-write. OpenCode data and
-   history at `~/.local/share/opencode` are also bind-mounted read-write so they
-   persist between sessions. Julia, Juliaup, and Tectonic use disposable
+   history at `~/.local/share/opencode` and Pi agent state at `~/.pi` are also
+   bind-mounted read-write so credentials, settings, and session history persist
+   between sessions. Julia, Juliaup, and Tectonic use disposable
    writable snapshots or copies instead. Git metadata is over-mounted read-only,
    including linked worktree and submodule metadata, while working-tree files
    remain writable. Git inspection works, but commits, staging, ref changes,
@@ -277,8 +278,8 @@ profile generations and give up their rollback options.
 - **Network Access**: The host network namespace is shared, including internet,
   LAN, and localhost services
 - **Project Directory**: Direct read/write access to your project files
-- **OpenCode State**: Direct read/write access to the host OpenCode data and
-  history directory
+- **AI Agent State**: Direct read/write access to the host OpenCode data and
+  history directory and Pi state under `~/.pi`
 - **GPU/Hardware with `--gpu`**: Selected DRI devices are passed through; device
   hiding uses a blacklist and should not be treated as a strong hardware
   boundary
@@ -313,8 +314,10 @@ anything readable inside the sandbox to be exfiltrated.
    - Git, OpenCode, and other selected configuration is copied
    - Configuration may expose personal information or credentials
 
-6. **Persistent OpenCode State**:
+6. **Persistent AI Agent State**:
    - Sandboxed programs can modify or delete the live OpenCode data/history
+   - Sandboxed programs can modify or delete Pi credentials, settings, extensions,
+     MCP credentials, and session history under `~/.pi`
    - Persistence is intentional, but it is outside the disposable-home boundary
 
 ## Similar projects
