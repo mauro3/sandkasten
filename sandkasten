@@ -175,6 +175,7 @@ mkdir -p "$SANDBOX_HOME/.config/zathura"
 mkdir -p "$SANDBOX_HOME/.local/share/fish"
 mkdir -p "$SANDBOX_HOME/.local/bin"
 mkdir -p "$SANDBOX_HOME/.cargo/bin"
+mkdir -p "$SANDBOX_HOME/.pi/agent/session"
 
 # Other directories
 mkdir -p "$SANDBOX_HOME/julia"
@@ -224,6 +225,11 @@ printf '%s\n' \
     cp -rL "$HOME/.config/opencode" "$SANDBOX_HOME/.config"
 [ -d "$HOME/.config/git" ] && \
     cp -rL "$HOME/.config/git" "$SANDBOX_HOME/.config"
+# Pi agent configuration
+[ -f "$HOME/.pi/agent/auth.json" ] && \
+    cp -L "$HOME/.pi/agent/auth.json" "$SANDBOX_HOME/.pi/agent/auth.json"
+[ -f "$HOME/.pi/agent/settings.json" ] && \
+    cp -L "$HOME/.pi/agent/settings.json" "$SANDBOX_HOME/.pi/agent/settings.json"
 # Julia configuration
 if [ "$WITH_JULIA" = true ] && [ -d "$HOME/julia/dot-julia-environments" ]; then
     cp -rL "$HOME/julia/dot-julia-environments" "$SANDBOX_HOME/julia/"
@@ -385,7 +391,7 @@ SANDBOX_ENV=(
 
 ## Ensure real AI-agent state directories exist (needed for bind-mounts)
 mkdir -p "$HOME/.local/share/opencode"
-mkdir -p "$HOME/.pi"
+mkdir -p "$HOME/.pi/agent/session"
 
 ## Launch sandbox
 echo "Launching sandboxed WezTerm..."
@@ -429,7 +435,7 @@ bwrap --unshare-user \
       --bind "$SANDBOX_HOME" "/home/$USER" \
       `# === Preserved real directories (bind-mounted from host) ===` \
       --bind "$HOME/.local/share/opencode" "/home/$USER/.local/share/opencode" \
-      --bind "$HOME/.pi" "/home/$USER/.pi" \
+      --bind "$HOME/.pi/agent/session" "/home/$USER/.pi/agent/session" \
       `# === Display server (Wayland) ===` \
       "${DISPLAY_BINDS[@]}" \
       `# === COW snapshots (Julia, Tectonic, etc.) ===` \
