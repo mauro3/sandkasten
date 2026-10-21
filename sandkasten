@@ -269,7 +269,9 @@ if [ "$WITH_JULIA" = true ]; then
     COW_BINDS+=(--bind "$JULIA_DEPOT_SANDBOX" "/home/$USER/.julia")
     # Fix up known Nix HM symlinks in Julia depot snapshot
     [ -L "$HOME/.julia/config/startup.jl" ] && \
-        cp "$HOME/.julia/config/startup.jl" "$JULIA_DEPOT_SANDBOX/config/startup.jl"
+        cp "$HOME/.julia/config/startup.jl" "$JULIA_DEPOT_SANDBOX/config/startup.jl.bak"
+    [ -L "$HOME/.julia/config/startup.jl" ] && \
+        mv "$JULIA_DEPOT_SANDBOX/config/startup.jl.bak" "$JULIA_DEPOT_SANDBOX/config/startup.jl"
     
     JULIAUP_SANDBOX=$(create_cow_snapshot "$HOME/.juliaup" "$SANDBOX_HOME/.juliaup")
     COW_BINDS+=(--bind "$JULIAUP_SANDBOX" "/home/$USER/.juliaup")
