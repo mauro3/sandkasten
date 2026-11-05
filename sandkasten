@@ -234,7 +234,7 @@ printf '%s\n' \
 if [ "$WITH_JULIA" = true ] && [ -d "$HOME/julia/dot-julia-environments" ]; then
     cp -rL "$HOME/julia/dot-julia-environments" "$SANDBOX_HOME/julia/"
 fi
-if [ "$WITH_JULIA" = true ] && [ -d "$HOME/julia/dot-julia-environments" ]; then
+if [ "$WITH_JULIA" = true ] && [ -d "$HOME/julia/dot-julia-dev" ]; then
     cp -rL "$HOME/julia/dot-julia-dev" "$SANDBOX_HOME/julia/"
 fi
 
