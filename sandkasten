@@ -61,32 +61,39 @@ def setenv_opt(name, host_env):
     """Return a --setenv option for name if it exists in host_env."""
     return setenv(name, host_env[name]) if name in host_env else []
 
-def git_pointer_targets(pointer, project):
-    """Return the Git directories a .git pointer file names inside project.
+def read_git_path_file(path):
+    """Return the text of a Git path file such as commondir, as git reads it.
 
-    A linked worktree's pointer reads "gitdir: <path>"; that directory's
-    `commondir` file names the main Git directory (hooks, config). The files
-    are parsed as git does, without running it: only trailing newlines are
-    removed (spaces are part of the path) and links are followed. Targets
-    outside the project are not mounted in the sandbox, so they are left out
-    rather than exposed.
+    Only trailing newlines are removed: spaces are part of the path.
     """
-    content = pointer.read_bytes().rstrip(b"\r\n")
-    if not content.startswith(b"gitdir: "):
-        return []
-    git_dir = (pointer.parent / os.fsdecode(content.removeprefix(b"gitdir: "))).resolve()
-    targets = [git_dir]
+    return os.fsdecode(path.read_bytes().rstrip(b"\r\n"))
+
+def git_dir_of_pointer(pointer):
+    """Return the Git directory a .git pointer file names, or None if malformed."""
+    content = read_git_path_file(pointer)
+    if not content.startswith("gitdir: "):
+        return None
+    return (pointer.parent / content.removeprefix("gitdir: ")).resolve()
+
+def common_dir_of(git_dir):
+    """Return the directory git_dir's `commondir` file names, or None.
+
+    A linked worktree's Git directory names the main one this way (hooks,
+    config). A linked commondir is followed, as git does.
+    """
     commondir_file = git_dir / "commondir"
-    if commondir_file.is_file():  # Follows a link, as git does.
-        commondir = os.fsdecode(commondir_file.read_bytes().rstrip(b"\r\n"))
-        targets.append((git_dir / commondir).resolve())
-    return [path for path in targets if path.is_dir() and path.is_relative_to(project)]
+    if not commondir_file.is_file():
+        return None
+    return (git_dir / read_git_path_file(commondir_file)).resolve()
 
 def git_binds(project):
     """Return read-only binds for the project's Git metadata.
 
-    This covers every .git directory or pointer file, plus the Git directories
-    pointers name inside the project (e.g. a sibling bare repository).
+    This covers every .git directory or pointer file, the Git directory a
+    pointer names, and the common directory either one names. Pointer and
+    commondir files are parsed without running git. Targets outside the
+    project are not mounted in the sandbox, so they are left out rather than
+    exposed.
     """
     project = Path(project).resolve()
     git_paths = set()
@@ -99,7 +106,13 @@ def git_binds(project):
                 raise ValueError(f"Refusing symlinked Git metadata: {git_path}")
             git_paths.add(git_path)
             if git_path.is_file():
-                git_paths.update(git_pointer_targets(git_path, project))
+                git_dir = git_dir_of_pointer(git_path)
+            else:
+                git_dir = git_path
+            if git_dir is not None:
+                for target in [git_dir, common_dir_of(git_dir)]:
+                    if target is not None and target.is_dir() and target.is_relative_to(project):
+                        git_paths.add(target)
         if ".git" in directories:
             directories.remove(".git")  # Do not descend into Git metadata.
     binds = []

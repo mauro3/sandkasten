@@ -78,8 +78,9 @@ Juliaup come from non-Nix host installations.
   copied `wezterm.lua` is patched only once; software rendering is a
   command-line override, not a config edit.
 - Git: `.git` directories and pointer files are bound read-only; symlinked
-  ones are refused. Pointers are parsed as text, never by running git; their
-  `gitdir` and `commondir` are bound read-only only if inside the project.
+  ones are refused. A pointer's `gitdir` and any Git directory's `commondir`
+  are parsed as git does (never by running it) and bound read-only if inside
+  the project.
 - Never mount all of `/nix`, the Nix daemon, Home Manager generations, the host
   runtime directory, or live host AI state (Pi, OpenCode). No disposable-home
   cleanup prompts.

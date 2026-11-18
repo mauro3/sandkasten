@@ -172,6 +172,17 @@ class HeadlessTests(unittest.TestCase):
             *headless.ro_bind(main), *headless.ro_bind(pointer), *headless.ro_bind(worktree_dir),
         ])
 
+    def test_git_directory_commondir_is_read_only(self):
+        project = self.project.resolve()
+        main = project / "main.git"
+        main.mkdir()
+        git_dir = project / "worktree/.git"
+        git_dir.mkdir(parents=True)
+        (git_dir / "commondir").write_text("../../main.git\n")
+        self.assertEqual(headless.git_binds(self.project), [
+            *headless.ro_bind(main), *headless.ro_bind(git_dir),
+        ])
+
     def test_malformed_git_pointer_binds_only_the_pointer(self):
         pointer = self.project / ".git"
         pointer.write_text("not a pointer\n")
