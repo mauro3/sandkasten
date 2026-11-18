@@ -156,6 +156,22 @@ class HeadlessTests(unittest.TestCase):
             *headless.ro_bind(project / "other/.git"), *headless.ro_bind(pointer),
         ])
 
+    def test_git_pointer_parsing_matches_git(self):
+        # Spaces are part of the path, and a linked commondir is followed.
+        project = self.project.resolve()
+        main = project / "main.git"
+        main.mkdir()
+        worktree_dir = project / "wt-meta "
+        worktree_dir.mkdir()
+        (project / "commondir-target").write_text("../main.git\n")
+        (worktree_dir / "commondir").symlink_to(project / "commondir-target")
+        (project / "wt").mkdir()
+        pointer = project / "wt/.git"
+        pointer.write_text("gitdir: ../wt-meta \n")
+        self.assertEqual(headless.git_binds(self.project), [
+            *headless.ro_bind(main), *headless.ro_bind(pointer), *headless.ro_bind(worktree_dir),
+        ])
+
     def test_malformed_git_pointer_binds_only_the_pointer(self):
         pointer = self.project / ".git"
         pointer.write_text("not a pointer\n")

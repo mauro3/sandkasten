@@ -66,17 +66,19 @@ def git_pointer_targets(pointer, project):
 
     A linked worktree's pointer reads "gitdir: <path>"; that directory's
     `commondir` file names the main Git directory (hooks, config). The files
-    are parsed as text, without running git. Targets outside the project are
-    not mounted in the sandbox, so they are left out rather than exposed.
+    are parsed as git does, without running it: only trailing newlines are
+    removed (spaces are part of the path) and links are followed. Targets
+    outside the project are not mounted in the sandbox, so they are left out
+    rather than exposed.
     """
-    lines = pointer.read_text(errors="replace").splitlines()
-    if not lines or not lines[0].startswith("gitdir:"):
+    content = pointer.read_bytes().rstrip(b"\r\n")
+    if not content.startswith(b"gitdir: "):
         return []
-    git_dir = (pointer.parent / lines[0].removeprefix("gitdir:").strip()).resolve()
+    git_dir = (pointer.parent / os.fsdecode(content.removeprefix(b"gitdir: "))).resolve()
     targets = [git_dir]
     commondir_file = git_dir / "commondir"
-    if commondir_file.is_file() and not commondir_file.is_symlink():
-        commondir = commondir_file.read_text(errors="replace").strip()
+    if commondir_file.is_file():  # Follows a link, as git does.
+        commondir = os.fsdecode(commondir_file.read_bytes().rstrip(b"\r\n"))
         targets.append((git_dir / commondir).resolve())
     return [path for path in targets if path.is_dir() and path.is_relative_to(project)]
 
