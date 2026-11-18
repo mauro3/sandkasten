@@ -42,9 +42,9 @@ then leaves tmux and the sandbox running. Closing the shell ends the session.
 
 The project is writable and system directories are read-only. So is Git
 metadata: the `.git` directories and pointer files found at launch, and the
-Git directories that pointers name inside the project (e.g. a sibling bare
-repository of a linked worktree). Pointer targets outside the project are not
-exposed, so such worktrees may not work. `/tmp` is
+Git directories that pointers or `commondir` files name inside the project
+(e.g. a sibling bare repository of a linked worktree). Pointer targets outside
+the project are not exposed, so such worktrees may not work. `/tmp` is
 private, and the environment is cleared except for `TERM`, `LANG`, and
 `OPENAI_API_KEY`, `OPENAI_API_BASE`, `ANTHROPIC_API_KEY`. User namespaces
 must be permitted; the launcher does not bypass AppArmor or other host limits.
@@ -325,7 +325,10 @@ you also want to delete old profile generations and their rollbacks.
 **Not isolated:**
 - **The project:** fully writable, so files can be changed or deleted, and
   host tools may run what the sandbox writes there (e.g. `.envrc`, Makefiles,
-  editor config, a planted `.git` in a new subdirectory). Consider
+  editor config, a planted `.git` in a new subdirectory). Git metadata
+  protection guards against accidental damage (history rewrites, deleting
+  `.git`), not against deliberate attacks on host Git; Git directories
+  the launch-time scan does not find stay writable. Consider
   `git config --global safe.bareRepository explicit`.
 - **The internet:** anything readable in the sandbox can be exfiltrated.
   With `--host-net`, also the LAN, host localhost services, and X11 (input
