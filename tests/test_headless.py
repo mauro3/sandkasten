@@ -131,12 +131,35 @@ class HeadlessTests(unittest.TestCase):
         command = self.command()
         self.assertLess(command.index("--bind"), command.index(str(self.project / ".git")))
 
-    def test_git_pointer_file_is_read_only_without_following_its_target(self):
+    def test_git_pointer_target_outside_project_is_not_exposed(self):
+        (self.root / "metadata").mkdir()
         pointer = self.project / ".git"
         pointer.write_text("gitdir: ../metadata\n")
         self.assertEqual(headless.git_binds(self.project), [
             "--ro-bind", str(pointer), str(pointer),
         ])
+
+    def test_worktree_git_dirs_inside_project_are_read_only(self):
+        # project/main.git (bare) with a linked worktree in project/worktree.
+        project = self.project.resolve()
+        main = project / "main.git"
+        worktree_dir = main / "worktrees/wt"
+        worktree_dir.mkdir(parents=True)
+        (worktree_dir / "commondir").write_text("../..\n")
+        (project / "worktree").mkdir()
+        pointer = project / "worktree/.git"
+        pointer.write_text(f"gitdir: {worktree_dir}\n")
+        (project / "other").mkdir()
+        (project / "other/.git").write_text("gitdir: ../main.git/worktrees/wt\n")  # Same targets.
+        self.assertEqual(headless.git_binds(self.project), [
+            *headless.ro_bind(main), *headless.ro_bind(worktree_dir),
+            *headless.ro_bind(project / "other/.git"), *headless.ro_bind(pointer),
+        ])
+
+    def test_malformed_git_pointer_binds_only_the_pointer(self):
+        pointer = self.project / ".git"
+        pointer.write_text("not a pointer\n")
+        self.assertEqual(headless.git_binds(self.project), headless.ro_bind(pointer.resolve()))
 
     def test_symlinked_git_entries_rejected(self):
         target = self.root / "metadata"

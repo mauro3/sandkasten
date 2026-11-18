@@ -61,9 +61,33 @@ def setenv_opt(name, host_env):
     """Return a --setenv option for name if it exists in host_env."""
     return setenv(name, host_env[name]) if name in host_env else []
 
+def git_pointer_targets(pointer, project):
+    """Return the Git directories a .git pointer file names inside project.
+
+    A linked worktree's pointer reads "gitdir: <path>"; that directory's
+    `commondir` file names the main Git directory (hooks, config). The files
+    are parsed as text, without running git. Targets outside the project are
+    not mounted in the sandbox, so they are left out rather than exposed.
+    """
+    lines = pointer.read_text(errors="replace").splitlines()
+    if not lines or not lines[0].startswith("gitdir:"):
+        return []
+    git_dir = (pointer.parent / lines[0].removeprefix("gitdir:").strip()).resolve()
+    targets = [git_dir]
+    commondir_file = git_dir / "commondir"
+    if commondir_file.is_file() and not commondir_file.is_symlink():
+        commondir = commondir_file.read_text(errors="replace").strip()
+        targets.append((git_dir / commondir).resolve())
+    return [path for path in targets if path.is_dir() and path.is_relative_to(project)]
+
 def git_binds(project):
-    """Return read-only binds for every .git directory or pointer file in project."""
-    binds = []
+    """Return read-only binds for the project's Git metadata.
+
+    This covers every .git directory or pointer file, plus the Git directories
+    pointers name inside the project (e.g. a sibling bare repository).
+    """
+    project = Path(project).resolve()
+    git_paths = set()
     # os.walk visits every directory below project; removing a name from
     # `directories` stops it from descending there.
     for root, directories, files in os.walk(project):
@@ -71,9 +95,15 @@ def git_binds(project):
             git_path = Path(root, ".git")
             if git_path.is_symlink():
                 raise ValueError(f"Refusing symlinked Git metadata: {git_path}")
-            binds.extend(ro_bind(git_path))
+            git_paths.add(git_path)
+            if git_path.is_file():
+                git_paths.update(git_pointer_targets(git_path, project))
         if ".git" in directories:
             directories.remove(".git")  # Do not descend into Git metadata.
+    binds = []
+    # Sorted, so a parent directory is bound before the paths inside it.
+    for git_path in sorted(git_paths):
+        binds.extend(ro_bind(git_path))
     return binds
 
 def format_command(command):

@@ -41,8 +41,10 @@ The project defaults to the current directory. On a server, start tmux
 then leaves tmux and the sandbox running. Closing the shell ends the session.
 
 The project is writable and system directories are read-only. So is Git
-metadata: the `.git` directories and pointer files found at launch (external
-Git directories are not exposed, so linked worktrees may not work). `/tmp` is
+metadata: the `.git` directories and pointer files found at launch, and the
+Git directories that pointers name inside the project (e.g. a sibling bare
+repository of a linked worktree). Pointer targets outside the project are not
+exposed, so such worktrees may not work. `/tmp` is
 private, and the environment is cleared except for `TERM`, `LANG`, and
 `OPENAI_API_KEY`, `OPENAI_API_BASE`, `ANTHROPIC_API_KEY`. User namespaces
 must be permitted; the launcher does not bypass AppArmor or other host limits.
