@@ -22,7 +22,9 @@ The default private network also needs pasta, nftables, `setpriv`, and `ip`
 This tool is vibe-coded. Whilst I do review the code, sandboxes are anything
 but my speciality.
 
-## Headless launcher (sandkasten)
+# Usage
+
+## sandkasten -- open a sandboxed, headless bash-shell
 
 ```bash
 ./sandkasten /path/to/project
@@ -62,7 +64,7 @@ sandboxed programs set the host clipboard. `set -g set-clipboard external` in
 `~/.tmux.conf` prevents that and keeps tmux's own copy mode working.
 
 
-## Desktop launcher (sandkasten3)
+## sandkasten3 -- open sandboxed wezterm in wayland
 
 ```bash
 ./sandkasten3 /path/to/project

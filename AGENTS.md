@@ -96,7 +96,8 @@ python3 -m py_compile sandkasten sandkasten3 sandkasten-cleanup
 git diff --check
 ```
 
-The tests mock Bubblewrap, pasta, and the compositor; namespaces, the network,
+`.github/workflows/tests.yml` runs the first three on Python 3.12 and the
+latest 3.x; keep it in step with this list. The tests mock Bubblewrap, pasta, and the compositor; namespaces, the network,
 Wayland, and Nix must still be checked on the host, e.g.:
 
 ```bash
