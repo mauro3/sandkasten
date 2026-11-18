@@ -2,16 +2,9 @@
 
 ## Near Term
 
-- [ ] Add an explicit way to resume a retained sandbox home. Define how its
-  matching `/tmp` directory, Julia snapshots, configuration refresh, and Nix
-  profile updates should behave before implementing it.
-- [ ] Make project-path handling explicit. The launcher currently calls
-  `realpath` before `mkdir`, so a nonexistent project argument is not created as
-  its comment suggests. It also silently accepts multiple project arguments and
-  uses the last one. Require exactly zero or one project directory and either
-  require it to exist with a clear error or create it before resolving it.
-- [ ] Clean up partially initialized homes and temporary directories when setup
-  fails, including failures from the copied-file `/nix/store/` check.
+- [ ] Clean up partially initialized homes when setup fails (e.g. an
+  interrupted copy or a failed Nix reference check). `/tmp` is already removed;
+  the home is kept and a partial destination must be deleted by hand.
 - [ ] Review copied local wrappers now that Nix provides `zathura`, `meld`, and
   `vale-ls`. Remove copies that are obsolete or intentionally document why a
   wrapper should override the Nix command.
@@ -20,21 +13,17 @@
 
 ## Security Hardening
 
-- [ ] Validate symlink targets before using `cp -rL`. Dereferencing is required
-  for Home Manager files, but a nested link to an unrelated host path can copy
-  data outside the intended configuration allowlist into the network-enabled
-  sandbox. Permit only expected source trees and `/nix/store` targets.
-- [ ] Stop writing `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` into
-  `sandbox.fish`. Pass them only through the process environment so retained
-  sandbox homes do not contain plaintext API keys.
-- [ ] Create sandbox homes, generated secret-bearing files, and host-side
-  temporary directories with private permissions. In particular, replace the
-  ordinary `/tmp/sandkasten.tmp.*` `mkdir` with `mktemp -d` or mode `0700`, and
-  consider a launcher-wide `umask 077`.
+- [ ] With the private network, `kill -9` of the launcher leaves the sandbox
+  running (without network): pasta's death signal does not reach its child
+  (on Fedora even a plain `sleep` survives). SIGTERM and SIGHUP are handled.
+  A fix (tested): run pasta inside an outer `bwrap --unshare-pid
+  --die-with-parent`, whose PID namespace the kernel kills as a whole; but
+  bwrap's no-new-privileges then keeps pasta out of its SELinux domain.
+
 - [ ] Make the generated `.sandbox-etc` files inaccessible through their
   writable sandbox-home source path if immutable identity files are desired.
-  They are mounted read-only at `/etc`, but remain reachable under the writable
-  sandbox home.
+  They are mounted read-only at `/etc` and rewritten each launch, but remain
+  writable under the sandbox home during a session.
 - [ ] Consider a seccomp policy if containment of malicious code becomes a
   goal. Filesystem and namespace isolation do not filter the syscall attack
   surface by themselves.
@@ -44,21 +33,18 @@
 
 ## Validation
 
-- [ ] Run host smoke tests for `./sandkasten --no-julia`, `./sandkasten --gpu`,
+- [ ] Run host smoke tests for `./sandkasten3 --no-julia`, `./sandkasten3 --gpu`,
   and the default Julia-enabled software-rendered mode.
 - [ ] Confirm an unrelated `/nix/store/...` path and the Nix daemon socket are
   inaccessible inside the sandbox.
 - [ ] Confirm copied configuration is writable without changing host files,
-  Julia/Tectonic changes remain disposable, and OpenCode state persists.
+  Julia/Tectonic changes stay in the sandbox, and OpenCode state persists.
 - [ ] Verify `env` inside the sandbox contains only the intended variables.
-- [ ] Verify cleanup rejects absolute outside paths, traversal, and symlink
-  targets; separately decide how cleanup should detect active sandbox homes.
 - [ ] Verify host IPC objects are inaccessible.
-- [ ] Verify terminal isolation and parent-death behavior.
 - [ ] Verify `.git` is read-only for ordinary repositories, linked worktrees,
   and submodules.
 - [ ] Verify retained homes and `/tmp/sandkasten.tmp.*` are not readable by
-  other local users after private permissions are implemented.
+  other local users.
 
 ## Flatpak Support - Deferred
 
