@@ -1,154 +1,111 @@
 # Sandkasten - Agent Context
 
-## What It Is
+Bubblewrap launchers for working with AI agents, meant to limit accidental
+damage, not to contain malicious code. `README.md` describes the behaviour
+(copy allowlists, link rules, network, Wayland, security model); keep it in
+sync with changes.
+The host is Fedora on x86-64 Linux; Fish, WezTerm, Helix, Git, Julia, and
+Juliaup come from non-Nix host installations.
 
-Sandkasten is a Bash launcher around Bubblewrap (`bwrap`). It starts a
-sandboxed WezTerm session for AI-assisted development with read-write access to
-one project directory. It is intended to limit accidental damage, not to contain
-malicious code.
+## Coding conventions (all launchers)
 
-The host is Fedora on x86-64 Linux. Fish, WezTerm, Helix, Git, Julia, and
-Juliaup come from Fedora or other non-Nix host installations. Selected
-development tools come from the repository's pinned Nix flake.
+- KISS: favor straightforward Python that a reader rusty in Python can follow.
+  Readability matters more than cleverness or minimum line count.
+- Use explicit `if`/`elif`/`else` branches for related, mutually exclusive cases
+  when they make the logic clearer. Do not replace them with early returns
+  merely for style; an `else` after a `return` is acceptable.
+- Prefer explicit argument lists and command-shaped helpers such as `ro_bind`,
+  `bind`, and `setenv`. Avoid dictionaries translated into command-line options,
+  generic frameworks, and unnecessary classes or modules.
+- Keep one source of truth: share preparation and command building between real
+  execution and dry-run output. Do not duplicate option definitions in a formatter.
+  Use `nl = None` markers to specify dry-run line breaks beside the arguments;
+  remove them before execution and quote arguments when rendering shell text.
+- Extract small, clearly named functions for distinct tasks. Keep orchestration
+  functions and `main()` easy to scan; keep argparse setup in `make_parser()`.
+  Avoid splitting code merely to hide duplicated logic in another function.
+- Use descriptive names that distinguish intent, e.g. `set_julia_path` for PATH
+  configuration versus `args.julia` for requesting Julia copies.
+- Give functions PEP 257 docstrings. Use short explanatory comments and section
+  headings where they help a reader understand the flow.
+- Keep dependencies to Python 3.12's standard library and the required external
+  commands; prefer simple, direct implementations over additional dependencies.
+- Inspect current files and Git state before editing: others may edit concurrently.
+  Preserve their naming, layout, and branching style. Respect requests for review
+  or explanation without edits; avoid unsolicited style-only rewrites.
 
-## Nix Tools
+## Structure
 
-- `sandbox-tools.nix` is the explicit package allowlist, built with
-  `pkgs.buildEnv`.
-- `flake.nix` uses `nixpkgs-unstable`; `flake.lock` pins the exact revision.
-- Build or rebuild on the host with:
-  `nix build .#sandbox-tools -o .sandkasten-nix-profile`.
-- `.sandkasten-nix-profile` is ignored by Git but must exist next to the real
-  `sandkasten` script. The launcher resolves its own path, so invocation through
-  a symlink in `PATH` works.
-- At launch, `nix-store --query --requisites` resolves the profile's runtime
-  closure. Each required store path is mounted read-only at its original
-  `/nix/store/...` path.
-- The profile is exposed inside the sandbox as `/opt/sandkasten-tools` and its
-  `bin` directory is first in the controlled sandbox `PATH`.
-- The complete `/nix/store`, host Home Manager profile, and Nix daemon socket
-  are not mounted. Nix builds and package installation are not supported inside
-  the sandbox.
-- Home Manager and Sandkasten have independent flakes and lock files. Updating
-  one does not update the other.
+- `sandkasten` (headless) holds the shared code. `launch()` runs the whole
+  session: `check_request()`, the lock, `make_sandbox_home()` and the network
+  files, the `files_to_copy()` and `copy_julia()` copies, an optional
+  `prepare_home`, the command builder, the TIOCSTI check (only without
+  `--new-session`), the `private_network_command()` prefix (unless
+  `--host-net`), then execution or dry-run output, and `/tmp` removal. Keep
+  dry-run and cleanup in this one function, with the lock held through
+  cleanup; do not split out another session runner. `files_to_copy()` only
+  returns the list.
+- `sandkasten3` (desktop) loads the extensionless `sandkasten` with importlib;
+  do not add a third shared module. It passes two functions to `launch()`,
+  bound with `functools.partial`: `prepare_sandbox_home` (desktop copies,
+  managed files, Nix reference check) and `build_command`, which cuts off the
+  known headless Bash tail and appends mounts, environment overrides, and
+  WezTerm. No monkeypatching of headless globals; headless behaviour is
+  unchanged without these arguments. `main()` creates the restricted Wayland
+  socket (`security_context_socket()`, a small stdlib Wayland client) around
+  `headless.launch()`.
+- `sandkasten-cleanup` removes unlocked homes and their `/tmp` directories.
+- `sandbox-tools.nix` is the Nix package allowlist (`pkgs.buildEnv`);
+  `flake.lock` pins nixpkgs-unstable. `.sandkasten-nix-profile` (ignored by
+  Git) must sit beside the real launcher scripts.
+- `sandkasten-old-bash` is an archived feature reference, not an active launcher.
 
-## Sandbox Home And Configuration
+## Invariants
 
-- `$HOME/.cache/sandkasten/YYYY-MM-DD_XXXXXXXXXXXXXXXX/` is the disposable
-  sandbox home (`$SANDBOX_HOME`). The random suffix comes from
-  `openssl rand -hex 8` and is 16 hexadecimal characters.
-- Minimal `passwd`, `group`, and `machine-id` files are generated under
-  `$SANDBOX_HOME/.sandbox-etc` and mounted read-only at `/etc`. This lets D-Bus
-  and other applications resolve the sandbox user without exposing the host
-  account database or machine ID.
-- Selected host files are copied directly into the sandbox home. Configuration
-  directories use `cp -rL` so Home Manager symlinks are dereferenced rather
-  than left dangling.
-- After the initial copies, the launcher scans the sandbox home for literal
-  `/nix/store/` references. References whose store hash is in the mounted tools
-  closure are allowed; the launcher refuses unresolved store paths.
-- WezTerm configuration is patched after copying. A sandbox-specific Fish file
-  sets the prompt, editor, graphics option, and API keys.
-- The generated Fish configuration contains `OPENAI_API_KEY` and
-  `ANTHROPIC_API_KEY` values. Retained sandbox homes therefore contain these
-  secrets until cleaned up.
-- There is no separate sandbox Home Manager configuration or generated home
-  output. The launcher contains the current explicit file allowlist.
+- Build Bubblewrap commands as argument lists and run them with `subprocess`;
+  never run a rendered shell string. `--clearenv`: every variable kept in the
+  sandbox is set explicitly. Informational and error output goes to stderr.
+- Homes: `~/.cache/sandkasten/project-<12 hex>` (an existing 8-hex home is
+  still used), or `YYYY-MM-DD_<16 hex>` with `--fresh` or `--tmp` (deleted on
+  exit by `remove_sandbox_home()`, shared with cleanup); the cache and homes are
+  0700. Lock files stay beside the homes, outside the mount, and are never
+  unlinked. Cleanup's name pattern must match both launchers' names.
+- Copies seed only missing destinations, through `copy_into_sandbox_home()`.
+  Config follows links (`cp -rL`) after `check_config_links()`; data
+  (`keep_links=True`) keeps inner links and tries a BTRFS snapshot. Files the
+  launcher writes go through `write_config()`, which never writes through a
+  link saved in the sandbox. Managed files are rewritten each launch; a newly
+  copied `wezterm.lua` is patched only once; software rendering is a
+  command-line override, not a config edit.
+- Git: `.git` directories and pointer files are bound read-only; symlinked
+  ones are refused; pointers are not followed.
+- Never mount all of `/nix`, the Nix daemon, Home Manager generations, the host
+  runtime directory, or live host AI state (Pi, OpenCode). No disposable-home
+  cleanup prompts.
+- Network: nft rejects overlapping set entries, so blocked networks are merged
+  with `ipaddress.collapse_addresses`. bwrap must keep its own user namespace
+  (`--unshare-user`), or the sandbox could change the firewall. No
+  `--hostname` is passed (may affect `flatpak-spawn`).
 
-## Writable And Persistent State
-
-- `$PROJECT_ROOT` is resolved with `realpath` and bind-mounted read-write at its
-  normal absolute path.
-- `.git` entries and resolved Git/common directories are over-mounted read-only
-  after the project bind. This covers ordinary repositories, nested repos,
-  submodules, and linked worktrees. `GIT_OPTIONAL_LOCKS=0` keeps inspection
-  commands from attempting optional index writes.
-- `$HOME/.local/share/opencode` is bind-mounted live and read-write so OpenCode
-  data and history persist across sessions. `$HOME/.pi` is also bind-mounted
-  live and read-write so Pi credentials, settings, extensions, MCP credentials,
-  and session history persist across sessions. These are intentional host state,
-  not part of the disposable home.
-- `~/.julia`, `~/.juliaup`, and `~/.cache/Tectonic` use writable BTRFS snapshots
-  when their source is a subvolume. Snapshot failure falls back to
-  `cp -r --reflink=auto`; an absent source becomes an empty directory.
-- Known Home Manager handling fixes `~/.julia/config/startup.jl` after the Julia
-  snapshot.
-- `--no-julia` skips the Julia and Juliaup snapshots and removes Juliaup from
-  `PATH`. Tectonic cache handling still runs.
-- GPU access is disabled by default. `--gpu` passes through selected DRI devices,
-  leaves the copied WezTerm renderer unchanged, and does not set
-  `LIBGL_ALWAYS_SOFTWARE` in the generated Fish configuration.
-- Sandbox `/tmp` is backed by a dedicated host directory named
-  `/tmp/sandkasten.tmp.*`.
-- On exit, the launcher offers to delete the sandbox home and temporary
-  directory. `sandkasten-cleanup` removes retained homes and matching temporary
-  directories; do not run it while sessions are active.
-
-## Isolation And Host Integration
-
-- System directories and selected resources are mounted read-only.
-- PID, IPC, UTS, cgroup, and user namespaces are unshared. User namespace
-  isolation is mandatory, and nested user namespaces are disabled. Some
-  browsers and container tools may require removing `--disable-userns`.
-- `--new-session` prevents controlling-terminal input injection, and
-  `--die-with-parent` terminates sandbox processes if the launcher dies.
-- The host network namespace is shared, including internet, LAN, and localhost
-  services.
-- WezTerm is launched through `dbus-run-session` inside Bubblewrap. The private
-  bus daemon and any D-Bus-activated services therefore remain in the sandbox.
-- FUSE, host desktop portals, PipeWire, and RealtimeKit are not exposed;
-  related warnings from private desktop services are expected.
-- Wayland is required. The Wayland socket is exposed; selected DRI devices are
-  exposed only with `--gpu`.
-- Device isolation uses a blacklist over `/dev`; it is not a strong hardware
-  security boundary.
-- `OPENAI_API_KEY`, `OPENAI_API_BASE`, and `ANTHROPIC_API_KEY` are passed into
-  the sandbox.
-- Bubblewrap uses `--clearenv`; every retained environment variable must be
-  explicitly set by the launcher.
-- No `--hostname` flag is passed to `bwrap`; this may affect `flatpak-spawn`.
-
-## Implementation Style
-
-- Keep the launcher as a single Bash script with helper functions first and the
-  main flow below.
-- Prefer the smallest correct change and preserve the existing direct approach.
-- Use Bash arrays for generated Bubblewrap argument groups; do not construct
-  unquoted argument strings.
-- Section comments inside the continued `bwrap` command use the existing
-  backtick-comment form: `` `# === Section ===` ``.
-- Send informational and error output to stderr where appropriate.
-- Do not expose all of `/nix`, the Nix daemon, or host Home Manager generations.
-- Do not change the live OpenCode/Pi binds or disposable Julia/Tectonic behavior
-  without treating it as a security and persistence decision.
-
-## Testing And Validation
-
-There is no automated test suite. At minimum:
+## Testing
 
 ```bash
-bash -n sandkasten
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -q
+python3 -m py_compile sandkasten sandkasten3 sandkasten-cleanup
+./sandkasten --help && ./sandkasten3 --help
 git diff --check
 ```
 
-Host-only manual validation:
+The tests mock Bubblewrap, pasta, and the compositor; namespaces, the network,
+Wayland, and Nix must still be checked on the host, e.g.:
 
 ```bash
 nix build .#sandbox-tools -o .sandkasten-nix-profile
-./sandkasten --no-julia /path/to/test-project
-./sandkasten --gpu /path/to/test-project
+./sandkasten3 --dry-run --fresh /path/to/test-project
 ./sandkasten /path/to/test-project
+./sandkasten3 /path/to/test-project
 ```
 
-Inside the sandbox, verify selected Nix commands, Fedora Fish/WezTerm/Helix,
-configuration loading, OpenCode and Pi persistence, Julia behavior, and that an
-unrelated `/nix/store/...` path and the Nix daemon are inaccessible.
-
-## Relevant Paths
-
-- `sandkasten` - main launcher
-- `sandkasten-cleanup` - removes retained sandbox homes and temporary dirs
-- `sandbox-tools.nix` - Nix package allowlist
-- `flake.nix` / `flake.lock` - flake definition and pinned Nixpkgs revision
-- `.sandkasten-nix-profile` - generated tools profile; ignored by Git
-- `README.md` - user-facing setup, maintenance, and security documentation
+Inside, check the Nix tools, Fish/WezTerm/Helix, config loading, Pi and
+OpenCode persistence, Julia, internet versus LAN and host localhost, and that
+unrelated `/nix/store` paths and the Nix daemon are inaccessible.

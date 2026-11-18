@@ -1,481 +1,772 @@
-#!/bin/bash
+#!/usr/bin/env python3
+"""Start a headless Bubblewrap shell."""
+
+# How it works (see launch() at the bottom):
+#   1. Check the request and find the saved sandbox home for this project
+#      (~/.cache/sandkasten/project-<hash>).
+#   2. Lock that home, so only one launcher uses it at a time.
+#   3. Create the home and copy selected host files into it, once.
+#   4. Build the bwrap argument list and run it (or print it for --dry-run).
+#      Unless --host-net is given, bwrap runs inside a private network
+#      namespace made by pasta: internet only, no LAN or host localhost.
+#   5. Remove the per-launch /tmp directory; the home is kept.
 #
-# Run development environment in sandbox by spawning a wezterm session. Tools include:
-# - Julia lang
-# - Helix editor
-# - opencode and pi AI-agentic coders
+# Depends only on the standard library.
 
-# === HELPER FUNCTIONS ===
+import argparse
+import fcntl
+import hashlib
+import ipaddress
+import json
+import os
+import pwd
+import secrets
+import shlex
+import shutil
+import signal
+import subprocess
+import sys
+from contextlib import contextmanager, nullcontext
+from datetime import date
+from pathlib import Path
 
-create_cow_snapshot() {
-    local SOURCE_DIR="$1"
-    local DEST_DIR="$2"
-    
-    if [ -d "$SOURCE_DIR" ]; then
-        echo "Creating snapshot: $SOURCE_DIR" >&2
-        if btrfs -q subvolume snapshot "$SOURCE_DIR" "$DEST_DIR" 2>/dev/null; then
-            echo "BTRFS snapshot created successfully" >&2
-        else
-            echo "BTRFS snapshot failed, copying with COW if available..." >&2
-            cp -r --reflink=auto "$SOURCE_DIR" "$DEST_DIR"
-        fi
-    else
-        mkdir -p "$DEST_DIR"
-    fi
-    
-    # Echo the snapshot path
-    echo "$DEST_DIR"
-}
+# Commands are built as Python lists of arguments. `nl` (None) marks where the
+# --dry-run output starts a new line; it is removed before bwrap is run.
+nl = None
 
-# === MAIN SCRIPT ===
 
-## Locate repository-managed resources independently of the current project
-SCRIPT_DIR=$(dirname "$(realpath "${BASH_SOURCE[0]}")")
-NIX_TOOLS_PROFILE="$SCRIPT_DIR/.sandkasten-nix-profile"
+## Build the bwrap command
+##########################
 
-if [ ! -e "$NIX_TOOLS_PROFILE" ]; then
-    echo "Nix tools profile not found: $NIX_TOOLS_PROFILE" >&2
-    echo "Build it with: nix build '$SCRIPT_DIR#sandbox-tools' -o '$NIX_TOOLS_PROFILE'" >&2
-    exit 1
-fi
+# Small helpers returning the bwrap arguments for one option, e.g.
+# ro_bind("/usr") -> ["--ro-bind", "/usr", "/usr"].
 
-if ! command -v nix-store >/dev/null 2>&1; then
-    echo "nix-store is required to determine the sandbox tools closure" >&2
-    exit 1
-fi
+def ro_bind(source, target=None):
+    """Return read-only bind arguments, defaulting the target to the source."""
+    return ["--ro-bind", str(source), str(target or source)]
 
-NIX_TOOLS_STORE_PATH=$(realpath "$NIX_TOOLS_PROFILE")
-if ! NIX_CLOSURE=$(nix-store --query --requisites "$NIX_TOOLS_STORE_PATH"); then
-    echo "Failed to determine the Nix closure for: $NIX_TOOLS_PROFILE" >&2
-    exit 1
-fi
+def ro_bind_opt(path):
+    """Return a read-only bind for an existing path, or no arguments."""
+    return ro_bind(path) if Path(path).exists() else []
 
-NIX_BINDS=(--dir /nix --dir /nix/store --dir /opt)
-declare -A NIX_CLOSURE_HASHES=()
-while IFS= read -r store_path; do
-    if [ -n "$store_path" ]; then
-        NIX_BINDS+=(--ro-bind "$store_path" "$store_path")
-        store_hash=${store_path#/nix/store/}
-        NIX_CLOSURE_HASHES["${store_hash%%-*}"]=1
-    fi
-done <<< "$NIX_CLOSURE"
-NIX_BINDS+=(--ro-bind "$NIX_TOOLS_STORE_PATH" /opt/sandkasten-tools)
+def bind(source, target=None):
+    """Return bind arguments, defaulting the target to the source."""
+    return ["--bind", str(source), str(target or source)]
 
-## Parse arguments 
-WITH_JULIA=true
-WITH_GPU=false
-PROJECT_ROOT=""
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        --no-julia)
-            WITH_JULIA=false
-            shift
-            ;;
-        --gpu)
-            WITH_GPU=true
-            shift
-            ;;
-        -*)
-            echo "Unknown option $1"
-            echo "Usage: $0 [--no-julia] [--gpu] [project_directory]"
-            exit 1
-            ;;
-        *)
-            PROJECT_ROOT="$1"
-            shift
-            ;;
-    esac
-done
+def setenv(name, value):
+    """Return Bubblewrap arguments for one environment variable."""
+    return ["--setenv", str(name), str(value)]
 
-## Project directory from argument or current directory
-PROJECT_ROOT=$(realpath "${PROJECT_ROOT:-$(pwd)}")
-echo "Setting up sandbox for: $PROJECT_ROOT"
-mkdir -p "$PROJECT_ROOT" # Ensure the project directory exists
+def setenv_opt(name, host_env):
+    """Return a --setenv option for name if it exists in host_env."""
+    return setenv(name, host_env[name]) if name in host_env else []
 
-## Protect Git metadata while leaving working-tree files writable
-GIT_BINDS=()
-declare -A GIT_BIND_PATHS=()
-while IFS= read -r -d '' git_entry; do
-    if [ -L "$git_entry" ]; then
-        echo "Refusing symlinked Git metadata path: $git_entry" >&2
-        exit 1
-    fi
+def git_binds(project):
+    """Return read-only binds for every .git directory or pointer file in project."""
+    binds = []
+    # os.walk visits every directory below project; removing a name from
+    # `directories` stops it from descending there.
+    for root, directories, files in os.walk(project):
+        if ".git" in directories or ".git" in files:
+            git_path = Path(root, ".git")
+            if git_path.is_symlink():
+                raise ValueError(f"Refusing symlinked Git metadata: {git_path}")
+            binds.extend(ro_bind(git_path))
+        if ".git" in directories:
+            directories.remove(".git")  # Do not descend into Git metadata.
+    return binds
 
-    if [ -z "${GIT_BIND_PATHS[$git_entry]+x}" ]; then
-        GIT_BINDS+=(--ro-bind "$git_entry" "$git_entry")
-        GIT_BIND_PATHS["$git_entry"]=1
-    fi
+def format_command(command):
+    """Format arguments separated by nl markers as shell continuation lines."""
+    # Collect arguments into lines, starting a new line at every nl marker.
+    lines = [[]]
+    for argument in command:
+        if argument is nl:
+            lines.append([])
+        else:
+            lines[-1].append(argument)
+    return " \\\n    ".join(shlex.join(line) for line in lines if line)
 
-    git_worktree=$(dirname "$git_entry")
-    git_dir=$(git -C "$git_worktree" rev-parse --absolute-git-dir 2>/dev/null || true)
-    git_common_dir=$(git -C "$git_worktree" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
-    for git_path in "$git_dir" "$git_common_dir"; do
-        if [ -e "$git_path" ] && [ -z "${GIT_BIND_PATHS[$git_path]+x}" ]; then
-            GIT_BINDS+=(--ro-bind "$git_path" "$git_path")
-            GIT_BIND_PATHS["$git_path"]=1
-        fi
-    done
-done < <(find "$PROJECT_ROOT" -name .git -print0 -prune)
+def build_command(project, sandbox_home, temp, user, host_env, set_julia_path):
+    """Return the argument list for a headless Bubblewrap shell.
 
-## Create sandbox directory in cache with date and random string
-CACHE_DIR="$HOME/.cache/sandkasten"
-mkdir -p "$CACHE_DIR"
-RANDOM_SUFFIX=$(openssl rand -hex 8)  # 16-character hex string
-SANDBOX_HOME="$CACHE_DIR/$(date +%Y-%m-%d)_$RANDOM_SUFFIX"
-mkdir -p "$SANDBOX_HOME"
-echo "Sandbox home: $SANDBOX_HOME"
+    The shell keeps the controlling terminal (it runs in an existing tmux pane)
+    and shares the network namespace bwrap is started in: the host's with
+    --host-net, otherwise pasta's (see private_network_command). No Wayland,
+    D-Bus, or GPU is exposed. If set_julia_path is true, the sandbox Juliaup bin
+    directory leads PATH. The list contains nl markers; remove them before execution.
+    """
+    home = f"/home/{user}"
+    path = "/usr/local/bin:/usr/bin:/bin"
+    if set_julia_path:
+        path = f"{home}/.juliaup/bin:{path}"
+    # `*` unpacks a helper's list into this list: *ro_bind("/usr") adds three items.
+    return [
+        "bwrap", nl,
+        # New user, PID, IPC, UTS, and cgroup namespaces; no nested userns.
+        # The real IDs: inside pasta's namespace the launcher appears as root.
+        "--unshare-user", "--uid", str(os.getuid()), "--gid", str(os.getgid()), nl,
+        "--disable-userns", nl,
+        "--unshare-pid", nl,
+        "--unshare-ipc", nl,
+        "--unshare-uts", nl,
+        "--unshare-cgroup", nl,
+        "--die-with-parent", nl,
+        "--share-net", nl,
+        # Read-only system paths, when present.
+        *ro_bind_opt("/usr"), nl,
+        *ro_bind_opt("/bin"), nl,
+        *ro_bind_opt("/lib"), nl,
+        *ro_bind_opt("/lib64"), nl,
+        *ro_bind_opt("/etc/ssl"), nl,
+        *ro_bind_opt("/etc/pki"), nl,
+        *ro_bind(sandbox_home / ".sandbox-etc/resolv.conf", "/etc/resolv.conf"), nl,
+        *ro_bind_opt("/etc/hosts"), nl,
+        *ro_bind_opt("/etc/nsswitch.conf"), nl,
+        *ro_bind_opt("/etc/localtime"), nl,
+        *ro_bind(sandbox_home / ".sandbox-etc/passwd", "/etc/passwd"), nl,
+        *ro_bind(sandbox_home / ".sandbox-etc/group", "/etc/group"), nl,
+        # Pseudo-filesystems and writable sandbox data.
+        "--proc", "/proc", nl,
+        "--dev", "/dev", nl,
+        *bind(temp, "/tmp"), nl,
+        "--symlink", "/tmp", "/var/tmp", nl,
+        *bind(sandbox_home, home), nl,
+        *bind(project), nl,
+        *git_binds(project), nl,
+        # Clear the inherited environment, then set only these values.
+        "--clearenv", nl,
+        *setenv("HOME", home), nl,
+        *setenv("USER", user), nl,
+        *setenv("LOGNAME", user), nl,
+        *setenv("SHELL", "/bin/bash"), nl,
+        *setenv("PATH", path), nl,
+        *setenv("LANG", host_env.get("LANG", "C.UTF-8")), nl,
+        *setenv("TERM", host_env.get("TERM", "xterm-256color")), nl,
+        *setenv("TMPDIR", "/tmp"), nl,
+        *setenv("PS1", r"[sandkasten] \w \$ "), nl,
+        *setenv("GIT_OPTIONAL_LOCKS", "0"), nl,
+        *setenv_opt("OPENAI_API_KEY", host_env), nl,
+        *setenv_opt("OPENAI_API_BASE", host_env), nl,
+        *setenv_opt("ANTHROPIC_API_KEY", host_env), nl,
+        "--chdir", str(project), nl,
+        "/bin/bash", "--noprofile", "-i",
+    ]
 
-## Create the minimal system identity files needed by D-Bus and other tools
-if ! command -v dbus-uuidgen >/dev/null 2>&1; then
-    echo "dbus-uuidgen is required to create the sandbox machine ID" >&2
-    exit 1
-fi
 
-SANDBOX_ETC="$SANDBOX_HOME/.sandbox-etc"
-mkdir -m 700 "$SANDBOX_ETC"
-SANDBOX_UID=$(id -u)
-SANDBOX_GID=$(id -g)
-printf 'root:x:0:0:root:/root:/usr/sbin/nologin\n' > "$SANDBOX_ETC/passwd"
-printf '%s:x:%s:%s:Sandbox User:/home/%s:/usr/bin/fish\n' \
-    "$USER" "$SANDBOX_UID" "$SANDBOX_GID" "$USER" >> "$SANDBOX_ETC/passwd"
-printf 'nobody:x:65534:65534:Nobody:/:/usr/sbin/nologin\n' >> "$SANDBOX_ETC/passwd"
-printf 'root:x:0:\n' > "$SANDBOX_ETC/group"
-printf '%s:x:%s:\n' "$USER" "$SANDBOX_GID" >> "$SANDBOX_ETC/group"
-printf 'nobody:x:65534:\n' >> "$SANDBOX_ETC/group"
-if ! dbus-uuidgen > "$SANDBOX_ETC/machine-id"; then
-    echo "Failed to create the sandbox machine ID" >&2
-    exit 1
-fi
-chmod 644 "$SANDBOX_ETC/passwd" "$SANDBOX_ETC/group" "$SANDBOX_ETC/machine-id"
-ETC_BINDS=(
-    --ro-bind /etc/ssl /etc/ssl
-    --ro-bind /etc/pki /etc/pki
-    --ro-bind /etc/fonts /etc/fonts
-    --ro-bind /etc/resolv.conf /etc/resolv.conf
-    --ro-bind /etc/hosts /etc/hosts
-    --ro-bind /etc/hostname /etc/hostname
-    --ro-bind "$SANDBOX_ETC/passwd" /etc/passwd
-    --ro-bind "$SANDBOX_ETC/group" /etc/group
-    --ro-bind "$SANDBOX_ETC/machine-id" /etc/machine-id
-)
+## Private network: pasta and nftables
+#######################################
 
-## Create a temp directory (i.e. /tmp) that will persist during the sandbox session
-SANDBOX_TEMP="/tmp/sandkasten.tmp.$(date +%Y-%m-%d)_$RANDOM_SUFFIX"
-mkdir -p "$SANDBOX_TEMP"
-echo "Temp-dir: $SANDBOX_TEMP"
+# Destinations the sandbox cannot reach without --host-net: private IPv4
+# ranges (home LAN, Tailscale's 100.64/10, link-local). The host's own subnets
+# are added at launch (host_subnets). The private network is IPv4-only: home
+# LAN devices often have global IPv6 addresses, which no fixed list can cover.
+PRIVATE_NETWORKS = ("10.0.0.0/8", "100.64.0.0/10", "169.254.0.0/16",
+                    "172.16.0.0/12", "192.168.0.0/16")
 
-## Set up minimal configuration directories
-# Note that configs are copied such that they can be modified, as some are
-# Configuration directories
-mkdir -p "$SANDBOX_HOME/.config/fish"
-mkdir -p "$SANDBOX_HOME/.config/fontconfig/conf.d"
-mkdir -p "$SANDBOX_HOME/.config/wezterm"
-mkdir -p "$SANDBOX_HOME/.config/zathura"
-# Local directories
-mkdir -p "$SANDBOX_HOME/.local/share/fish"
-mkdir -p "$SANDBOX_HOME/.local/bin"
-mkdir -p "$SANDBOX_HOME/.cargo/bin"
-mkdir -p "$SANDBOX_HOME/.pi/agent/session"
+def nameservers(text):
+    """Return the nameserver addresses in resolv.conf text, except loopback and link-local.
 
-# Other directories
-mkdir -p "$SANDBOX_HOME/julia"
+    Neither works from a private network namespace: loopback is the
+    namespace's own, and a link-local address needs a host interface.
+    """
+    servers = []
+    for line in text.splitlines():
+        fields = line.split()
+        if len(fields) >= 2 and fields[0] == "nameserver":
+            try:
+                address = ipaddress.ip_address(fields[1])
+            except ValueError:
+                continue  # Not an address; resolv.conf syntax allows no other value.
+            if not address.is_loopback and not address.is_link_local:
+                servers.append(address)
+    return servers
 
-## Copy essential configuration files
-# Fontconfig sees this user configuration through /etc/fonts/conf.d/50-user.conf.
-printf '%s\n' \
-    '<?xml version="1.0"?>' \
-    '<fontconfig>' \
-    '  <dir>/opt/sandkasten-tools/share/fonts</dir>' \
-    '</fontconfig>' \
-    > "$SANDBOX_HOME/.config/fontconfig/conf.d/10-sandkasten-fonts.conf"
-[ -f "$HOME/.config/fontconfig/conf.d/52-hm-default-fonts.conf" ] && \
-    cp -L "$HOME/.config/fontconfig/conf.d/52-hm-default-fonts.conf" \
-        "$SANDBOX_HOME/.config/fontconfig/conf.d/"
-# Shell configuration
-[ -f "$HOME/.config/fish/config.fish" ] && \
-    cp "$HOME/.config/fish/config.fish" "$SANDBOX_HOME/.config/fish/"
-# Terminal and editor configs
-[ -f "$HOME/.config/wezterm/wezterm.lua" ] && \
-    cp "$HOME/.config/wezterm/wezterm.lua" "$SANDBOX_HOME/.config/wezterm/"
-[ -f "$HOME/.config/zathura/zathurarc" ] && \
-    cp "$HOME/.config/zathura/zathurarc" "$SANDBOX_HOME/.config/zathura/"
-# Git configuration
-[ -f "$HOME/.gitignore.global" ] && \
-    cp "$HOME/.gitignore.global" "$SANDBOX_HOME"
-# Scripts and binaries
-[ -f "$HOME/.local/bin/juliap" ] && \
-    cp "$HOME/.local/bin/juliap" "$SANDBOX_HOME/.local/bin/"
-[ -f "$HOME/.local/bin/zathura" ] && \
-    cp "$HOME/.local/bin/zathura" "$SANDBOX_HOME/.local/bin/"
-[ -f "$HOME/.local/bin/meld" ] && \
-    cp "$HOME/.local/bin/meld" "$SANDBOX_HOME/.local/bin/"
-[ -f "$HOME/.local/bin/helix-repl-start.sh" ] && \
-    cp "$HOME/.local/bin/helix-repl-start.sh" "$SANDBOX_HOME/.local/bin/"
-[ -f "$HOME/.local/bin/vale-ls" ] && \
-    cp "$HOME/.local/bin/vale-ls" "$SANDBOX_HOME/.local/bin/"
-[ -f "$HOME/.cargo/bin/simple-completion-language-server" ] && \
-    cp "$HOME/.cargo/bin/simple-completion-language-server" "$SANDBOX_HOME/.cargo/bin/"
+def host_dns_servers():
+    """Return the host's upstream DNS servers.
 
-## Copy configuration directories
-[ -d "$HOME/.config/helix" ] && \
-    cp -rL "$HOME/.config/helix" "$SANDBOX_HOME/.config"
-[ -d "$HOME/.config/vale" ] && \
-    cp -rL "$HOME/.config/vale" "$SANDBOX_HOME/.config"
-[ -d "$HOME/.config/opencode" ] && \
-    cp -rL "$HOME/.config/opencode" "$SANDBOX_HOME/.config"
-[ -d "$HOME/.config/git" ] && \
-    cp -rL "$HOME/.config/git" "$SANDBOX_HOME/.config"
-# Pi agent configuration
-[ -f "$HOME/.pi/agent/auth.json" ] && \
-    cp -L "$HOME/.pi/agent/auth.json" "$SANDBOX_HOME/.pi/agent/auth.json"
-[ -f "$HOME/.pi/agent/settings.json" ] && \
-    cp -L "$HOME/.pi/agent/settings.json" "$SANDBOX_HOME/.pi/agent/settings.json"
-# Julia configuration
-if [ "$WITH_JULIA" = true ] && [ -d "$HOME/julia/dot-julia-environments" ]; then
-    cp -rL "$HOME/julia/dot-julia-environments" "$SANDBOX_HOME/julia/"
-fi
-if [ "$WITH_JULIA" = true ] && [ -d "$HOME/julia/dot-julia-dev" ]; then
-    cp -rL "$HOME/julia/dot-julia-dev" "$SANDBOX_HOME/julia/"
-fi
+    With systemd-resolved, /etc/resolv.conf only names its local stub
+    127.0.0.53, which a private network namespace cannot reach; the upstream
+    servers are listed in /run/systemd/resolve/resolv.conf instead.
+    """
+    resolved = Path("/run/systemd/resolve/resolv.conf")
+    if resolved.is_file():
+        return nameservers(resolved.read_text())
+    else:
+        return nameservers(Path("/etc/resolv.conf").read_text())
 
-## Copied configuration must not depend on unmounted Nix store paths
-STORE_REFERENCE_FILES=$(grep -RFl --exclude-dir=.git -- '/nix/store/' "$SANDBOX_HOME" 2>/dev/null)
-if [ -n "$STORE_REFERENCE_FILES" ]; then
-    UNMOUNTED_STORE_REFERENCES=()
-    while IFS= read -r store_reference; do
-        store_hash=${store_reference##*/}
-        if [ -z "${NIX_CLOSURE_HASHES[$store_hash]+x}" ]; then
-            UNMOUNTED_STORE_REFERENCES+=("$store_reference")
-        fi
-    done < <(grep -RahoE --exclude-dir=.git '/nix/store/[0-9a-z]{32}' "$SANDBOX_HOME" 2>/dev/null | sort -u)
+def host_subnets():
+    """Return the networks of the host's IPv4 addresses, i.e. the LANs it is on.
 
-    if [ "${#UNMOUNTED_STORE_REFERENCES[@]}" -gt 0 ]; then
-        echo "Copied sandbox files refer to unmounted Nix store paths:" >&2
-        printf '  %s\n' "${UNMOUNTED_STORE_REFERENCES[@]}" >&2
-        echo "Files containing Nix store references:" >&2
-        while IFS= read -r reference_file; do
-            printf '  %s\n' "$reference_file" >&2
-        done <<< "$STORE_REFERENCE_FILES"
-        echo "Replace those references or add their packages to sandbox-tools.nix." >&2
-        exit 1
-    fi
-fi
+    This also covers LANs with public addresses (as at some universities),
+    which PRIVATE_NETWORKS misses. Read once at launch, like the DNS servers.
+    """
+    # `ip -j` prints JSON: one entry per interface, each with its addresses.
+    result = subprocess.run(["ip", "-j", "-4", "addr"], check=True,
+                            capture_output=True, text=True)
+    networks = []
+    for interface in json.loads(result.stdout):
+        for address in interface.get("addr_info", []):
+            network = ipaddress.ip_interface(f"{address['local']}/{address['prefixlen']}").network
+            if not network.is_loopback:
+                networks.append(network)
+    return networks
 
-## Larger directories are copied on write (COW), if possible
-COW_BINDS=()
-# Julia-related directories (only if requested)
-if [ "$WITH_JULIA" = true ]; then
-    JULIA_DEPOT_SANDBOX=$(create_cow_snapshot "$HOME/.julia" "$SANDBOX_HOME/.julia")
-    COW_BINDS+=(--bind "$JULIA_DEPOT_SANDBOX" "/home/$USER/.julia")
-    # Fix up known Nix HM symlinks in Julia depot snapshot
-    [ -L "$HOME/.julia/config/startup.jl" ] && \
-        cp "$HOME/.julia/config/startup.jl" "$JULIA_DEPOT_SANDBOX/config/startup.jl.bak"
-    [ -L "$HOME/.julia/config/startup.jl" ] && \
-        mv "$JULIA_DEPOT_SANDBOX/config/startup.jl.bak" "$JULIA_DEPOT_SANDBOX/config/startup.jl"
-    
-    JULIAUP_SANDBOX=$(create_cow_snapshot "$HOME/.juliaup" "$SANDBOX_HOME/.juliaup")
-    COW_BINDS+=(--bind "$JULIAUP_SANDBOX" "/home/$USER/.juliaup")
-fi
-# Tectonic cache
-mkdir -p "$SANDBOX_HOME/.cache"
-TECTONIC_CACHE_SANDBOX=$(create_cow_snapshot "$HOME/.cache/Tectonic" "$SANDBOX_HOME/.cache/Tectonic")
-COW_BINDS+=(--bind "$TECTONIC_CACHE_SANDBOX" "/home/$USER/.cache/Tectonic")
+def blocked_networks(host_networks):
+    """Return PRIVATE_NETWORKS and host_networks merged, so that none overlap.
 
-## Patch config
-# wezterm.lua to uncomment sandbox-specific settings
-if [ -f "$SANDBOX_HOME/.config/wezterm/wezterm.lua" ]; then
-  sed -i 's/-- config.use_fancy_tab_bar = false/config.use_fancy_tab_bar = false/' "$SANDBOX_HOME/.config/wezterm/wezterm.lua"
-  sed -i 's/-- config.colors.tab_bar = { background = "#9C923C" }/config.colors.tab_bar = { background = "#9C923C" }/' "$SANDBOX_HOME/.config/wezterm/wezterm.lua"
-  sed -i "s|-- config.default_prog = { '/usr/bin/fish' }|config.default_prog = { '/usr/bin/fish' }|" "$SANDBOX_HOME/.config/wezterm/wezterm.lua"
-  if [ "$WITH_GPU" = false ]; then
-    sed -i "/^return config$/i config.front_end = 'Software'" "$SANDBOX_HOME/.config/wezterm/wezterm.lua"
-  fi
-elif [ "$WITH_GPU" = false ]; then
-  printf "return { front_end = 'Software' }\n" > "$SANDBOX_HOME/.config/wezterm/wezterm.lua"
-fi
+    nft rejects a set with overlapping entries, e.g. 192.168.0.0/16 and a
+    host subnet 192.168.1.0/24; collapse_addresses merges such entries.
+    """
+    networks = [ipaddress.ip_network(network) for network in PRIVATE_NETWORKS]
+    networks += host_networks
+    return list(ipaddress.collapse_addresses(networks))
 
-if [ "$WITH_GPU" = true ]; then
-    FISH_GRAPHICS_CONFIG="# GPU rendering enabled by the launcher"
-else
-    FISH_GRAPHICS_CONFIG="# Use software rendering for sandboxed graphical programs
-set -x LIBGL_ALWAYS_SOFTWARE \"1\""
-fi
+def firewall_rules(dns_servers, networks):
+    """Return nftables rules allowing DNS to dns_servers, then rejecting networks.
 
-# Create sandbox-specific fish configuration
-cat > "$SANDBOX_HOME/.config/fish/sandbox.fish" <<EOF
-# Sandbox-specific Fish configuration
-function fish_prompt
-    set_color yellow
-    echo -n "[SANDBOX] "
-    set_color cyan
-    echo -n (prompt_pwd)
-    set_color normal
-    echo -n "> "
-end
+    Rules apply in order, so a DNS server inside a blocked network (such as
+    a home router) stays reachable on port 53. IPv6 is rejected except on
+    the sandbox's own loopback, in case pasta ever provides it.
+    """
+    lines = ["table inet sandkasten {",
+             "  chain output {",
+             "    type filter hook output priority 0; policy accept;"]
+    for server in dns_servers:
+        lines.append(f"    ip daddr {server} udp dport 53 accept")
+        lines.append(f"    ip daddr {server} tcp dport 53 accept")
+    lines.append(f"    ip daddr {{ {', '.join(str(network) for network in networks)} }} reject")
+    lines.append('    meta nfproto ipv6 oifname != "lo" reject')
+    lines += ["  }", "}"]
+    return "\n".join(lines) + "\n"
 
-set -x EDITOR hx
-set -x OPENAI_API_KEY "$OPENAI_API_KEY"
-set -x ANTHROPIC_API_KEY "$ANTHROPIC_API_KEY"
+def network_files(host_net):
+    """Return the sandbox resolv.conf text and firewall rules (None with host_net).
 
-$FISH_GRAPHICS_CONFIG
+    The DNS servers and host subnets are read once, at launch: after
+    switching networks, restart the sandbox to use the new network.
+    """
+    if host_net:
+        # The host's local resolver stays reachable through the shared network.
+        host_resolv = Path("/etc/resolv.conf")
+        if host_resolv.exists():
+            return host_resolv.read_text(), None
+        else:
+            return "", None
+    else:
+        # The private network is IPv4-only, so IPv6 servers cannot be used.
+        servers = [server for server in host_dns_servers() if server.version == 4]
+        if not servers:
+            raise ValueError("No usable host DNS server found (loopback, link-local, "
+                             "and IPv6 servers do not work in the private network); "
+                             "use --host-net to share the host network instead")
+        resolv_conf = "".join(f"nameserver {server}\n" for server in servers)
+        return resolv_conf, firewall_rules(servers, blocked_networks(host_subnets()))
 
-# Welcome message
-echo "🔒 Sandboxed Environment: $PROJECT_ROOT 🔒"
-EOF
-# Append sandbox config to config.fish# 
-echo "source ~/.config/fish/sandbox.fish" >> "$SANDBOX_HOME/.config/fish/config.fish"
+def private_network_command(sandbox_home):
+    """Return the command prefix that runs bwrap in a private network namespace.
 
-## Display server configuration
-# Wayland
-DISPLAY_BINDS=(--ro-bind "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY")
+    pasta creates a user and network namespace with IPv4 internet access
+    (-4) through the host. The host's localhost is not mapped (--no-map-gw,
+    -T/-U none) and no ports are forwarded in (-t/-u none). Inside, sh loads
+    the firewall rules with nft, then execs bwrap; the sandbox's own user
+    namespace cannot change them. env resets the signals pasta ignores
+    (SIGPIPE). setpriv kills pasta if the launcher dies; this does not end
+    the sandbox (see run_sandbox).
+    """
+    return [
+        "setpriv", "--pdeathsig", "SIGKILL", nl,
+        "pasta", "--config-net", "-4", "--no-map-gw", nl,
+        "-t", "none", "-u", "none", "-T", "none", "-U", "none", nl,
+        # sh -c SCRIPT $0 $1 ...: $1 is the rules file, the rest is bwrap's argv.
+        "--", "sh", "-c", 'nft -f "$1" && shift && exec "$@"', "sh",
+        str(sandbox_home / ".sandbox-etc/firewall.nft"), nl,
+        "env", "--default-signal", nl,
+    ]
 
-## Hide host device categories that are not needed in the sandbox
-DEVICE_MASKS=(
-    --tmpfs /dev/snd
-    --tmpfs /dev/input
-    --tmpfs /dev/usb
-    --tmpfs /dev/disk
-    --tmpfs /dev/block
-    --tmpfs /dev/mapper
-    --tmpfs /dev/net
-    --tmpfs /dev/v4l
-    --tmpfs /dev/hidraw0
-    --tmpfs /dev/hidraw1
-    --tmpfs /dev/media0
-    --tmpfs /dev/media1
-    --tmpfs /dev/video0
-    --tmpfs /dev/video1
-    --tmpfs /dev/video2
-    --tmpfs /dev/video3
-    --tmpfs /dev/watchdog
-    --tmpfs /dev/watchdog0
-    --tmpfs /dev/rfkill
-    --tmpfs /dev/snapshot
-    --tmpfs /dev/vboxdrv
-    --tmpfs /dev/vboxdrvu
-    --tmpfs /dev/vboxnetctl
-    --tmpfs /dev/vboxusb
-    --tmpfs /dev/vfio
-)
 
-## Add DRI access permissions for GPU
-GPU_BINDS=()
-if [ "$WITH_GPU" = true ]; then
-    for dev in /dev/dri/renderD* /dev/dri/card*; do
-        if [ -e "$dev" ]; then
-            echo "Binding DRI device: $dev"
-            GPU_BINDS+=(--dev-bind "$dev" "$dev")
-        fi
-    done
-fi
+## Prepare the sandbox home and temporary directory
+###################################################
 
-## Use only explicitly exposed tools and Fedora system paths
-SANDBOX_PATH="/opt/sandkasten-tools/bin:/home/$USER/.local/bin:/home/$USER/.cargo/bin"
-if [ "$WITH_JULIA" = true ]; then
-    SANDBOX_PATH="$SANDBOX_PATH:/home/$USER/.juliaup/bin"
-fi
-SANDBOX_PATH="$SANDBOX_PATH:/usr/local/bin:/usr/bin:/bin"
-SANDBOX_LANG=${LANG:-C.UTF-8}
-SANDBOX_ENV=(
-    --clearenv
-    --setenv HOME "/home/$USER"
-    --setenv USER "$USER"
-    --setenv LOGNAME "$USER"
-    --setenv SHELL /usr/bin/fish
-    --setenv LANG "$SANDBOX_LANG"
-    --setenv WAYLAND_DISPLAY "$WAYLAND_DISPLAY"
-    --setenv XDG_RUNTIME_DIR "$XDG_RUNTIME_DIR"
-    --setenv XDG_SESSION_TYPE wayland
-    --setenv PATH "$SANDBOX_PATH"
-    --setenv GIT_OPTIONAL_LOCKS 0
-    --setenv OPENAI_API_KEY "$OPENAI_API_KEY"
-    --setenv OPENAI_API_BASE "$OPENAI_API_BASE"
-    --setenv ANTHROPIC_API_KEY "$ANTHROPIC_API_KEY"
-    --setenv TMPDIR /tmp
-)
+def sandbox_home_name(project, fresh=False):
+    """Return a stable name for a canonical project path, or a fresh random name."""
+    if fresh:
+        return f"{date.today()}_{secrets.token_hex(8)}"
+    else:
+        return "project-" + hashlib.sha256(os.fsencode(project)).hexdigest()[:12]
 
-## Ensure real AI-agent state directories exist (needed for bind-mounts)
-mkdir -p "$HOME/.local/share/opencode"
-mkdir -p "$HOME/.pi/agent/session"
-mkdir -p "$HOME/.pi/agent/sessions"
-mkdir -p "$HOME/.pi/agent/npm"
+def files_to_copy(args):
+    """Return the configuration to copy as (path, missing_ok) pairs."""
+    paths = []
+    if args.host_config:
+        # Pi authentication is included: retained homes are sensitive.
+        paths += [".bashrc",
+                  ".inputrc",
+                  ".gitconfig",
+                  ".gitignore.global",
+                  ".config/git",
+                  ".config/helix",
+                  ".pi/agent/auth.json",
+                  ".pi/agent/settings.json"]
+    copies = [(path, True) for path in paths]
+    # Explicit -c paths are relative to the working directory, not the home.
+    copies += [(Path(value).expanduser().absolute(), False) for value in args.copy]
+    return copies
 
-## Launch sandbox
-echo "Launching sandboxed WezTerm..."
+# Configuration copies follow links into the Nix store (see check_config_links).
+NIX_STORE = Path("/nix/store")
 
-# Device access strategy: blacklist approach
-# We use --dev to get proper devtmpfs with all infrastructure (symlinks, PTY support, etc.),
-# then use --tmpfs to hide unwanted device categories. See create_cow_snapshot comment for details.
-# To debug missing device access: strace -f -e trace=openat ./sandkasten 2>&1 | grep -E "/dev.*ENOENT"
-bwrap --unshare-user \
-      `# Some browsers require nested user namespaces; comment this out if needed` \
-      --disable-userns \
-      --unshare-pid \
-      --unshare-ipc \
-      --unshare-uts \
-      --unshare-cgroup \
-      --new-session \
-      --die-with-parent \
-      `# === Read-only system bindings ===` \
-      --ro-bind /usr /usr \
-      --ro-bind /bin /bin \
-      --ro-bind /lib /lib \
-      --ro-bind /lib64 /lib64 \
-      --ro-bind /usr/libexec /usr/libexec \
-      `# === System resources ===` \
-      --ro-bind /usr/share/zoneinfo /usr/share/zoneinfo \
-      --ro-bind /usr/share/fonts /usr/share/fonts \
-      `# === Read-only /etc resources and sandbox identity ===` \
-      "${ETC_BINDS[@]}" \
-      `# === Nix tools and their read-only runtime closure ===` \
-      "${NIX_BINDS[@]}" \
-      --share-net \
-      `# === Device access (blacklist approach) ===` \
-      `# Use --dev for proper devtmpfs, then hide unwanted categories with --tmpfs` \
-      --dev /dev \
-      "${DEVICE_MASKS[@]}" \
-      `# === GPU access (whitelisted DRI devices) ===` \
-      "${GPU_BINDS[@]}" \
-      `# === Sandbox directories ===` \
-      --bind "$SANDBOX_TEMP" /tmp \
-      --proc /proc \
-      --bind "$SANDBOX_HOME" "/home/$USER" \
-      `# === Preserved real directories (bind-mounted from host) ===` \
-      --bind "$HOME/.local/share/opencode" "/home/$USER/.local/share/opencode" \
-      --bind "$HOME/.pi/agent/sessions" "/home/$USER/.pi/agent/sessions" \
-      --bind "$HOME/.pi/agent/npm" "/home/$USER/.pi/agent/npm" \
-      `# === Display server (Wayland) ===` \
-      "${DISPLAY_BINDS[@]}" \
-      `# === COW snapshots (Julia, Tectonic, etc.) ===` \
-      "${COW_BINDS[@]}" \
-      `# === Project directory ===` \
-      --bind "$PROJECT_ROOT" "$PROJECT_ROOT" \
-      `# === Read-only Git metadata ===` \
-      "${GIT_BINDS[@]}" \
-      `# === Environment variables ===` \
-      "${SANDBOX_ENV[@]}" \
-      `# === Launch WezTerm with D-Bus confined inside the sandbox ===` \
-      /usr/bin/dbus-run-session -- /usr/bin/wezterm start --cwd "$PROJECT_ROOT"
+def config_links_outside(directory, relative):
+    """Return "link -> target" lines for links in directory that would copy other files.
 
-# Capture the exit code
-BWRAP_EXIT=$?
-echo "bwrap exited with code: $BWRAP_EXIT"
+    relative is directory's path relative to the home, e.g. .config/git.
+    Allowed are links into the Nix store, within directory, and dotfiles
+    links: a dotfiles manager (Home Manager's out-of-store links, GNU Stow)
+    links each file to the same home-relative path in a checkout, e.g.
+    .config/git/config -> ~/dotfiles/.config/git/config. A linked dotfiles
+    directory is checked the same way; os.walk itself does not follow links.
+    """
+    top = directory.resolve()
+    outside = []
+    for root, directories, files in os.walk(top):
+        for name in directories + files:
+            path = Path(root, name)
+            if not path.is_symlink():
+                continue
+            target = path.resolve()
+            link_relative = relative / path.relative_to(top)
+            if target.is_relative_to(NIX_STORE) or target.is_relative_to(top):
+                continue
+            elif target.parts[-len(link_relative.parts):] == link_relative.parts:
+                if target.is_dir():
+                    outside += config_links_outside(target, link_relative)
+            else:
+                outside.append(f"  {path} -> {target}")
+    return outside
 
-## Clean up
-read -p "Delete sandbox directory $SANDBOX_HOME and temp $SANDBOX_TEMP? (y/N)" -n 1 -r
-echo    # move to a new line
-if [[ $REPLY =~ ^[Yy]$ ]]; then
-   # Try to delete BTRFS subvolumes first for faster cleanup
-   for subvol in "$JULIA_DEPOT_SANDBOX" "$JULIAUP_SANDBOX" "$TECTONIC_CACHE_SANDBOX"; do
-       if [ -d "$subvol" ]; then
-           echo "Trying to delete BTRFS subvolume: $subvol"
-           if btrfs -q subvolume delete "$subvol" 2>/dev/null; then
-               echo "Successfully deleted subvolume: $subvol"
-           fi
-       fi
-   done
-   
-   # Remove the entire sandbox directory (handles any remaining files/dirs)
-   rm -rf "$SANDBOX_HOME"
-   rm -rf "$SANDBOX_TEMP"
-fi
+def check_config_links(source, relative):
+    """Refuse configuration whose inner links would copy unrelated host files.
+
+    Configuration copies follow links (cp -L), so Home Manager links into the
+    Nix store become real files. Any other link inside a copied directory
+    would copy its target too, e.g. a link to ~/.ssh (see config_links_outside
+    for the allowed links). The source itself may link anywhere (e.g. to a
+    dotfiles checkout): it is the path that was asked for.
+    """
+    if source.is_dir():
+        outside = config_links_outside(source, relative)
+    else:
+        outside = []
+    if outside:
+        raise ValueError(f"Refusing to copy {source}: links inside it point elsewhere than "
+                         f"{NIX_STORE}, the copied directory, or the same path in a dotfiles "
+                         "checkout, so their targets would be copied too:\n" + "\n".join(outside) +
+                         "\nReplace these links, or skip this copy (e.g. --no-host-config).")
+
+def copy_into_sandbox_home(host_home, sandbox_home, path, *,
+                           missing_ok=True, keep_links=False, dry_run=False):
+    """Copy a host path into the sandbox home at the same home-relative location.
+
+    Relative paths are taken from host_home; sources must lie inside it.
+    Missing sources are skipped if missing_ok, otherwise rejected. Existing
+    destinations are left alone. Dry-run only prints.
+
+    Configuration (the default) follows links, so Home Manager links into the
+    unmounted /nix/store become real files; check_config_links refuses links
+    that would pull in other host files. With keep_links (for data such as
+    .julia), links inside directories are kept and a BTRFS snapshot is tried.
+    """
+    # Work out source and destination, e.g. ~/.config/git -> <sandbox_home>/.config/git
+    source = Path(os.path.abspath(host_home / Path(path).expanduser()))
+    if not source.is_relative_to(host_home):
+        raise ValueError(f"Copy source must be inside your home directory ({host_home}): {source}")
+    relative = source.relative_to(host_home)
+    destination = sandbox_home / relative
+    resolved_home = sandbox_home.resolve()
+
+    # Refuse copies that are never wanted.
+    if not source.exists() and not missing_ok:
+        raise ValueError(f"Copy source is missing or not a file/directory: {source}")
+    if source.exists() and not source.is_file() and not source.is_dir():
+        raise ValueError(f"Copy source is missing or not a file/directory: {source}")
+    if source.exists() and source.resolve() in (resolved_home, *resolved_home.parents):
+        raise ValueError(f"Cannot copy a directory containing the sandbox home: {source}")
+    if relative.parts[:1] == (".sandbox-etc",):
+        raise ValueError(".sandbox-etc is reserved for generated sandbox identity files")
+    if not destination.parent.resolve().is_relative_to(resolved_home):
+        # A link saved inside the sandbox must not redirect the copy to the host.
+        raise ValueError(f"Copy destination points outside the sandbox home: {destination}")
+
+    # Then skip, preview, or copy.
+    if not source.exists():
+        if dry_run:
+            print(f"Not copying as source is missing: {source}", file=sys.stderr)
+    elif destination.exists() or destination.is_symlink():
+        # Keep what the sandbox already has (also a dangling link).
+        if dry_run:
+            print(f"Keep existing: {str(destination)!r}", file=sys.stderr)
+    else:
+        # Checked only when copying, so saved homes keep launching.
+        if not keep_links:
+            check_config_links(source, relative)
+        if dry_run:
+            print(f"Would copy: {str(source)!r} -> {str(destination)!r}", file=sys.stderr)
+        else:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            copy_path(source, destination, keep_links)
+
+def copy_path(source, destination, keep_links):
+    """Copy source to the not yet existing destination (a file or a directory).
+
+    If keep_links, first try a cheap writable BTRFS snapshot of a directory.
+    That only works if source is a BTRFS subvolume; otherwise use GNU cp.
+    """
+    if keep_links and source.is_dir() and shutil.which("btrfs"):
+        result = subprocess.run(["btrfs", "-q", "subvolume", "snapshot",
+                                 str(source.resolve()), str(destination)],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if result.returncode == 0:
+            return
+    # cp options: -r recursive; -T copy *as* destination, not into it;
+    # -L follow every link, or -H follow only a linked source argument;
+    # --reflink=auto makes cheap copy-on-write copies where the filesystem can
+    # (Python's shutil.copytree cannot request that).
+    if keep_links:
+        links = "-H"
+    else:
+        links = "-L"
+    subprocess.run(["cp", "-rT", links, "--preserve=mode,timestamps", "--reflink=auto",
+                    "--", str(source), str(destination)], check=True)
+
+def copy_julia(host_home, sandbox_home, dry_run=False):
+    """Copy .julia and .juliaup as data, but make a linked startup.jl a real file."""
+    startup = ".julia/config/startup.jl"
+    depot = sandbox_home / ".julia"
+    new_depot = not (depot.exists() or depot.is_symlink())
+    copy_into_sandbox_home(host_home, sandbox_home, ".julia", keep_links=True, dry_run=dry_run)
+    copy_into_sandbox_home(host_home, sandbox_home, ".juliaup", keep_links=True, dry_run=dry_run)
+    # Only on the first copy, so later sandbox edits of startup.jl are kept.
+    if new_depot and (host_home / startup).is_symlink():
+        copied = sandbox_home / startup
+        # Check before unlinking: a kept .julia/config link could lead to the host.
+        if not copied.parent.resolve().is_relative_to(sandbox_home.resolve()):
+            raise ValueError(f"Copy destination points outside the sandbox home: {copied}")
+        if not dry_run:
+            copied.unlink(missing_ok=True)
+        copy_into_sandbox_home(host_home, sandbox_home, startup, dry_run=dry_run)
+
+def write_config(home, relative, text):
+    """Write a launcher-managed file without following links saved in the sandbox."""
+    path = home / relative
+    if not path.parent.resolve().is_relative_to(home.resolve()):
+        raise ValueError(f"Config directory points outside the sandbox home: {path.parent}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.unlink(missing_ok=True)  # Replace a link instead of writing through it.
+    path.write_text(text)
+    path.chmod(0o644)
+
+def make_sandbox_home(sandbox_home, user):
+    """Create the private home and the account files mounted at /etc."""
+    sandbox_home.mkdir(parents=True, mode=0o700, exist_ok=True)
+    sandbox_home.chmod(0o700)
+    uid, gid = os.getuid(), os.getgid()
+    write_config(sandbox_home, ".sandbox-etc/passwd",
+                 f"{user}:x:{uid}:{gid}:Sandbox:/home/{user}:/bin/bash\n")
+    write_config(sandbox_home, ".sandbox-etc/group", f"{user}:x:{gid}:\n")
+
+def write_network_files(sandbox_home, resolv_conf, firewall):
+    """Write the sandbox resolv.conf and, unless None, the firewall rules."""
+    write_config(sandbox_home, ".sandbox-etc/resolv.conf", resolv_conf)
+    if firewall is None:
+        (sandbox_home / ".sandbox-etc/firewall.nft").unlink(missing_ok=True)
+    else:
+        write_config(sandbox_home, ".sandbox-etc/firewall.nft", firewall)
+
+def temp_path(sandbox_home):
+    """Return the host directory mounted as the sandbox's /tmp."""
+    return Path("/tmp") / f"sandkasten.tmp.{sandbox_home.name}"
+
+def prepare_temp(temp):
+    """Create a private temporary directory, replacing leftovers from a crash."""
+    if temp.is_symlink():
+        raise ValueError(f"Refusing symlinked temporary directory: {temp}")
+    if temp.exists():
+        shutil.rmtree(temp)
+    temp.mkdir(mode=0o700)
+
+
+## Run it: lock, prepare, bwrap, clean up
+#########################################
+
+# @contextmanager lets this be used as `with lock_sandbox_home(home): ...`.
+# The code before `yield` runs when the with-block starts; the lock is released
+# when the lock file is closed, i.e. when the with-block ends.
+class SandboxInUse(ValueError):
+    """Another launch or cleanup holds the sandbox home's lock."""
+
+@contextmanager
+def lock_sandbox_home(sandbox_home):
+    """Hold an exclusive lock, kept beside the sandbox home, until the block ends."""
+    # The cache holds every home and lock: keep it private, like the homes.
+    sandbox_home.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+    sandbox_home.parent.chmod(0o700)
+    with sandbox_home.with_name(sandbox_home.name + ".lock").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise SandboxInUse("This sandbox home is already in use. Reattach to its tmux "
+                               "session or use --fresh for a separate home.") from None
+        yield
+
+def check_tiocsti():
+    """Refuse to share the terminal if sandboxed programs could type into it.
+
+    The TIOCSTI ioctl pushes characters into a terminal's input queue; after
+    the sandbox exits, the host shell would read them as typed commands.
+    Linux 6.2 and later block it with the sysctl dev.tty.legacy_tiocsti = 0;
+    older kernels always allow it.
+    """
+    setting = Path("/proc/sys/dev/tty/legacy_tiocsti")
+    if not setting.exists():
+        raise ValueError("This kernel always allows TIOCSTI terminal input injection "
+                         "(dev.tty.legacy_tiocsti needs Linux 6.2 or later); "
+                         "the headless sandbox shares your terminal, so it is refused")
+    elif setting.read_text().strip() != "0":
+        raise ValueError("TIOCSTI terminal input injection is enabled, and the headless "
+                         "sandbox shares your terminal. Disable it with: "
+                         "sudo sysctl dev.tty.legacy_tiocsti=0")
+
+def check_request(args):
+    """Check the launch request; return the host home, project, and sandbox home."""
+    if os.getuid() == 0:
+        raise ValueError("Run Sandkasten as your normal user, not root")
+    if not args.dry_run:
+        for executable in ("bwrap", "cp"):
+            if not shutil.which(executable):
+                raise ValueError(f"Required command not found: {executable}")
+        if not args.host_net:
+            for executable in ("setpriv", "pasta", "nft", "ip"):
+                if not shutil.which(executable):
+                    raise ValueError(f"Required command not found: {executable} "
+                                     "(for the private network; not needed with --host-net)")
+    host_home = Path.home()
+    project = Path(args.project).resolve(strict=True)
+    if not project.is_dir() or project == host_home.resolve():
+        raise ValueError("Choose a project directory, not your entire home or a file")
+    cache = host_home / ".cache/sandkasten"
+    sandbox_home = cache / sandbox_home_name(project, fresh=args.fresh or args.tmp)
+    if not (args.fresh or args.tmp):
+        # Homes made before the hash was lengthened keep their 8-character name.
+        legacy = cache / sandbox_home.name[:len("project-") + 8]
+        if not sandbox_home.exists() and legacy.is_dir():
+            sandbox_home = legacy
+    if sandbox_home.is_symlink():
+        raise ValueError(f"Refusing symlinked sandbox home: {sandbox_home}")
+    return host_home, project, sandbox_home
+
+def launch(args, *, prepare_home=None, command_builder=None):
+    """Check, lock, prepare, and run the sandbox, then remove its temp directory.
+
+    Dry-run previews the same steps without changing files. The desktop
+    launcher (sandkasten3) passes two extra functions: prepare_home runs after
+    the shared copies, and command_builder replaces build_command.
+    """
+    host_home, project, sandbox_home = check_request(args)
+    temp = temp_path(sandbox_home)
+    user = pwd.getpwuid(os.getuid()).pw_name
+    environment = os.environ.copy()
+    if command_builder is None:
+        command_builder = build_command
+    resolv_conf, firewall = network_files(args.host_net)
+
+    # A real run holds the lock until the sandbox has exited. A dry run
+    # changes nothing, so it does not even create the lock file.
+    if args.dry_run:
+        lock = nullcontext()  # A with-block helper that does nothing.
+    else:
+        lock = lock_sandbox_home(sandbox_home)
+    with lock:
+        if sandbox_home.is_dir():
+            print(f"Reusing sandbox home: {sandbox_home}", file=sys.stderr)
+        else:
+            print(f"Creating sandbox home: {sandbox_home}", file=sys.stderr)
+        if args.host_net:
+            print("Network: shared with host (including LAN and localhost)", file=sys.stderr)
+        else:
+            servers = ", ".join(str(server) for server in nameservers(resolv_conf))
+            print("Network: private, internet only (no LAN or host localhost); "
+                  f"DNS {servers}", file=sys.stderr)
+        if args.dry_run:
+            print("Dry run: no files or directories will be created or changed.", file=sys.stderr)
+            for key in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY"):
+                if key in environment:
+                    environment[key] = "<redacted>"
+        else:
+            prepare_temp(temp)
+
+        # `finally` removes /tmp even when a step fails or after `return`.
+        try:
+            # 1. Create the home, its account files, and its network files.
+            if not args.dry_run:
+                make_sandbox_home(sandbox_home, user)
+                write_network_files(sandbox_home, resolv_conf, firewall)
+            # 2. Copy missing files; the desktop then adds its own files and settings.
+            for path, missing_ok in files_to_copy(args):
+                copy_into_sandbox_home(host_home, sandbox_home, path,
+                                       missing_ok=missing_ok, dry_run=args.dry_run)
+            if args.julia:
+                copy_julia(host_home, sandbox_home, dry_run=args.dry_run)
+            if prepare_home is not None:
+                prepare_home(host_home, sandbox_home, user, dry_run=args.dry_run)
+            # 3. Make the bwrap argument list.
+            command = command_builder(project, sandbox_home, temp, user, environment, args.julia)
+            if "--new-session" not in command:
+                # The sandbox shares this terminal (headless keeps job control).
+                check_tiocsti()
+            if not args.host_net:
+                command = private_network_command(sandbox_home) + command
+            # 4. Print it (dry-run), or run it directly, without a shell.
+            if args.dry_run:
+                if firewall is not None:
+                    print(f"Firewall rules (nft):\n{firewall}", file=sys.stderr)
+                print(format_command(command))
+                return 0
+            else:
+                argv = [argument for argument in command if argument is not nl]
+                return run_sandbox(argv, own_process_group="--new-session" in command)
+        finally:
+            if args.dry_run:
+                pass
+            elif args.tmp:
+                shutil.rmtree(temp)
+                remove_sandbox_home(sandbox_home)
+            else:
+                shutil.rmtree(temp)
+                print(f"Home retained: {sandbox_home}\n"
+                      f"Remove it with: sandkasten-cleanup {sandbox_home.name}", file=sys.stderr)
+
+
+def remove_sandbox_home(sandbox_home):
+    """Delete a sandbox home that no session uses, and its /tmp directory.
+
+    Used by --tmp and by sandkasten-cleanup. BTRFS snapshots (Julia,
+    Tectonic) are deleted as subvolumes first, which is much faster than
+    removing their files. Links are never followed.
+    """
+    print(f"Removing sandbox home: {sandbox_home}", file=sys.stderr)
+    btrfs = shutil.which("btrfs")
+    for subvolume in (sandbox_home / ".julia", sandbox_home / ".juliaup", sandbox_home / ".cache/Tectonic"):
+        # Resolve the whole path: a linked .cache must not lead to host subvolumes.
+        if subvolume.is_symlink() or not subvolume.resolve().is_relative_to(sandbox_home.resolve()):
+            print(f"  Refusing symlinked subvolume path: {subvolume}", file=sys.stderr)
+        elif subvolume.is_dir() and btrfs:
+            result = subprocess.run([btrfs, "subvolume", "delete", str(subvolume)],
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if result.returncode == 0:
+                print(f"  Deleted BTRFS subvolume: {subvolume}", file=sys.stderr)
+    temp = temp_path(sandbox_home)
+    if temp.is_dir() and not temp.is_symlink():
+        shutil.rmtree(temp)
+    if sandbox_home.is_dir() and not sandbox_home.is_symlink():
+        shutil.rmtree(sandbox_home)
+
+
+def run_sandbox(argv, own_process_group):
+    """Run the sandbox, wait until it has exited, and return its exit status.
+
+    The launcher must hold the lock and /tmp until then. SIGTERM and SIGHUP
+    (e.g. closing the launcher's terminal) therefore kill the sandbox first:
+    the death of pasta alone does not end it. A sandbox that does not use this
+    terminal (desktop) gets its own process group, so the terminal's Ctrl-C
+    reaches only the launcher, which keeps waiting.
+    """
+    process = subprocess.Popen(argv, process_group=0 if own_process_group else None)
+
+    def stop_sandbox(signum, frame):
+        try:
+            os.kill(bwrap_pid(process.pid, argv), signal.SIGKILL)
+        except ProcessLookupError:
+            pass  # It has just exited.
+
+    old_handlers = [signal.signal(signum, stop_sandbox) for signum in (signal.SIGTERM, signal.SIGHUP)]
+    try:
+        while True:
+            try:
+                return process.wait()
+            except KeyboardInterrupt:
+                print(f"\nThe sandbox keeps running. End its session, "
+                      f"or stop it with: kill -9 {bwrap_pid(process.pid, argv)}", file=sys.stderr)
+    finally:
+        signal.signal(signal.SIGTERM, old_handlers[0])
+        signal.signal(signal.SIGHUP, old_handlers[1])
+
+def bwrap_pid(pid, argv):
+    """Return the PID of bwrap, whose death ends the sandbox.
+
+    With the private network, bwrap is pasta's child (or not started yet:
+    then return pasta's PID). bwrap does not stop on SIGTERM there; use SIGKILL.
+    """
+    if argv[0] == "bwrap":
+        return pid
+    else:
+        children = Path(f"/proc/{pid}/task/{pid}/children").read_text().split()
+        if children:
+            return int(children[0])
+        else:
+            return pid
+
+
+## Command line
+###############
+
+def make_parser():
+    """Return the headless option parser (the desktop launcher extends it)."""
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        epilog=(
+            "Restarting in the same project reuses its saved home. "
+            "Homes, including those created with --fresh, are retained after exit; "
+            "--tmp homes are deleted. "
+            "Remove a saved home with sandkasten-cleanup SANDBOX_HOME_NAME, or remove all "
+            "inactive homes with sandkasten-cleanup. Deleting the project's saved "
+            "home resets its state for the next launch."
+        ),
+    )
+    parser.add_argument("project", nargs="?", default=".", help="writable project directory")
+    parser.add_argument(
+        "--no-julia", dest="julia", action="store_false",
+        help="skip default Julia copies and Juliaup PATH setup; keep existing saved files",
+    )
+    parser.add_argument(
+        "--no-host-config", dest="host_config", action="store_false",
+        help="skip default shell, Git, Helix and Pi config copies (including Pi auth); keep existing saved files",
+    )
+    parser.add_argument(
+        "-c", "--copy", action="append", default=[], metavar="PATH",
+        help="copy a file/directory from inside your home, preserving its home-relative path (repeatable)",
+    )
+    parser.add_argument(
+        "--host-net", action="store_true",
+        help="share the host network, including LAN and localhost "
+             "(default: private network via pasta, internet only)",
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help="print the planned command without creating/copying files or launching; redact API keys",
+    )
+    parser.add_argument(
+        "--fresh", action="store_true",
+        help="use a separate one-off home instead of the project's saved one (also retained until sandkasten-cleanup)",
+    )
+    parser.add_argument(
+        "--tmp", action="store_true",
+        help="like --fresh, but delete the home when the session ends",
+    )
+    return parser
+
+if __name__ == "__main__":
+    try:
+        sys.exit(launch(make_parser().parse_args()))
+    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+        print(f"sandkasten: {error}", file=sys.stderr)
+        sys.exit(1)

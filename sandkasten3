@@ -1,0 +1,479 @@
+#!/usr/bin/env python3
+"""Start a persistent Wayland/WezTerm development sandbox."""
+
+# This extends the headless launcher in the file `sandkasten`; that file's
+# launch() runs the whole session. This file only supplies two additions:
+#   - prepare_sandbox_home(): copy desktop config and AI state, write the
+#     launcher-managed files, and check for unmounted Nix store references;
+#   - build_command(): add Wayland, the Nix tools, and WezTerm to the
+#     headless bwrap command.
+# main() at the bottom checks the desktop requirements, creates a restricted
+# Wayland socket (security_context_socket), and hands both to launch().
+
+import importlib.machinery
+import importlib.util
+import os
+import re
+import secrets
+import shutil
+import socket
+import struct
+import subprocess
+import sys
+import tempfile
+from contextlib import contextmanager, nullcontext
+from functools import partial
+from pathlib import Path
+
+
+# Load the file `sandkasten` as a module named `headless`. A plain `import`
+# cannot do this because the file has no .py extension. Its `if __name__ ==
+# "__main__"` block does not run, so loading it does not start a sandbox.
+SCRIPT_DIR = Path(__file__).resolve().parent
+loader = importlib.machinery.SourceFileLoader("sandkasten_headless", str(SCRIPT_DIR / "sandkasten"))
+spec = importlib.util.spec_from_loader(loader.name, loader)
+headless = importlib.util.module_from_spec(spec)
+loader.exec_module(headless)
+nl = headless.nl  # Line-break marker for dry-run output.
+
+
+## Read-only host resources
+###########################
+
+def nix_tools(script_dir):
+    """Return read-only binds for the tools profile's closure, and its store hashes."""
+    profile = script_dir / ".sandkasten-nix-profile"
+    if not profile.exists():
+        raise ValueError(
+            f"Nix tools profile not found: {profile}\n"
+            f"Build it with: nix build '{script_dir}#sandbox-tools' -o '{profile}'"
+        )
+    if not shutil.which("nix-store"):
+        raise ValueError("nix-store is required to determine the sandbox tools closure")
+    # The full runtime closure, not just the packages listed in sandbox-tools.nix.
+    store_path = profile.resolve()
+    result = subprocess.run(["nix-store", "--query", "--requisites", str(store_path)],
+                            check=True, text=True, stdout=subprocess.PIPE)
+    paths = [Path(line) for line in result.stdout.splitlines() if line.strip()]
+    if store_path not in paths:
+        raise ValueError("Nix closure does not include the tools profile")
+    binds = ["--dir", "/nix", nl, "--dir", "/nix/store", nl, "--dir", "/opt", nl]
+    hashes = set()
+    for path in paths:
+        if path.parent != Path("/nix/store") or not re.fullmatch(r"[0-9a-z]{32}-.+", path.name):
+            raise ValueError(f"Invalid Nix closure path: {path}")
+        binds += [*headless.ro_bind(path), nl]
+        hashes.add(path.name.split("-", 1)[0])  # Store names are <hash>-<name>.
+    binds += [*headless.ro_bind(store_path, "/opt/sandkasten-tools"), nl]
+    return binds, hashes
+
+def wayland_socket(environment):
+    """Return the host runtime directory and the one Wayland socket to expose."""
+    runtime = environment.get("XDG_RUNTIME_DIR")
+    display = environment.get("WAYLAND_DISPLAY")
+    if not runtime or not display:
+        raise ValueError("An active Wayland session is required (XDG_RUNTIME_DIR and WAYLAND_DISPLAY)")
+    runtime = Path(runtime)
+    if not runtime.is_absolute() or runtime == Path("/") or not runtime.is_dir():
+        raise ValueError(f"Invalid Wayland runtime directory: {runtime}")
+    socket = runtime / display  # An absolute WAYLAND_DISPLAY also works.
+    if not socket.is_socket():
+        raise ValueError(f"Wayland socket not found: {socket}")
+    return runtime, socket
+
+
+## Wayland security context
+###########################
+
+# A client of the normal Wayland socket may use the compositor's privileged
+# protocols; on niri it can type into other windows, take screenshots, and
+# read the clipboard. With wp_security_context_v1 the compositor creates a
+# second socket whose clients it treats as sandboxed and hides those
+# protocols from (as for Flatpak). Only that socket is mounted in the sandbox.
+#
+# Wayland's wire format: each message is the object id (u32), then
+# (size << 16 | opcode) (u32), then the arguments, in native byte order. A
+# string is its length including the NUL (u32), its bytes, and the NUL,
+# padded to a multiple of 4 bytes. File descriptors travel beside the bytes.
+
+# Object ids: 1 is the display; a client picks the ids of the objects it creates.
+WL_DISPLAY = 1
+REGISTRY = 2
+FIRST_SYNC = 3
+MANAGER = 4
+CONTEXT = 5
+LAST_SYNC = 6
+
+def wayland_request(object_id, opcode, *args):
+    """Return one encoded Wayland request; args are ints (u32) or strings."""
+    body = b""
+    for arg in args:
+        if isinstance(arg, str):
+            data = arg.encode() + b"\0"
+            body += struct.pack("=I", len(data)) + data + b"\0" * (-len(data) % 4)
+        else:
+            body += struct.pack("=I", arg)
+    return struct.pack("=II", object_id, (8 + len(body)) << 16 | opcode) + body
+
+def wayland_string(payload, offset):
+    """Return the string at offset in an event payload, and the offset after it."""
+    (length,) = struct.unpack_from("=I", payload, offset)
+    text = payload[offset + 4:offset + 4 + length - 1].decode()
+    return text, offset + 4 + length + (-length % 4)
+
+def wayland_events(connection, callback):
+    """Return (object id, opcode, payload) events until wl_callback `callback` is done.
+
+    A sync request's callback is done after the compositor has handled all
+    earlier requests. A wl_display error event (a protocol error) raises.
+    """
+    events = []
+    buffer = b""
+    while True:
+        data = connection.recv(65536)
+        if not data:
+            raise ValueError("The Wayland compositor closed the connection")
+        buffer += data
+        while len(buffer) >= 8:
+            object_id, header = struct.unpack_from("=II", buffer)
+            size, opcode = header >> 16, header & 0xFFFF
+            if size < 8:
+                raise ValueError("Invalid Wayland message from the compositor")
+            if len(buffer) < size:
+                break  # Wait for the rest of this message.
+            payload = buffer[8:size]
+            buffer = buffer[size:]
+            if object_id == WL_DISPLAY and opcode == 0:
+                # error(object id, code, message)
+                message, _ = wayland_string(payload, 8)
+                raise ValueError(f"Wayland protocol error: {message}")
+            elif object_id == callback:
+                return events
+            else:
+                events.append((object_id, opcode, payload))
+
+# @contextmanager: the code before `yield` runs when the with-block starts,
+# the `finally` part when it ends.
+@contextmanager
+def security_context_socket(host_socket, runtime, instance_id):
+    """Yield a new Wayland socket for sandboxed clients; close it when the block ends.
+
+    Raise ValueError if the compositor does not offer wp_security_context_v1.
+    The compositor listens on the socket until the close pipe's write end is
+    closed; the connection used to set it up is not needed afterwards.
+    """
+    directory = Path(tempfile.mkdtemp(prefix="sandkasten-wayland-", dir=runtime))
+    sandbox_socket = directory / "wayland-0"
+    close_read, close_write = os.pipe()
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection, \
+             socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+            listener.bind(str(sandbox_socket))
+            listener.listen()
+            connection.connect(str(host_socket))
+
+            # 1. List the globals; the sync callback marks the end of the list.
+            connection.sendall(wayland_request(WL_DISPLAY, 1, REGISTRY)     # get_registry
+                               + wayland_request(WL_DISPLAY, 0, FIRST_SYNC))  # sync
+            manager = None
+            for object_id, opcode, payload in wayland_events(connection, FIRST_SYNC):
+                if object_id == REGISTRY and opcode == 0:  # global(name, interface, version)
+                    (name,) = struct.unpack_from("=I", payload)
+                    interface, _ = wayland_string(payload, 4)
+                    if interface == "wp_security_context_manager_v1":
+                        manager = name
+            if manager is None:
+                raise ValueError("The Wayland compositor does not offer wp_security_context_v1, "
+                                 "which hides privileged protocols (virtual keyboard, screencopy, "
+                                 "clipboard access) from the sandbox. Use --full-wayland to "
+                                 "mount the normal Wayland socket instead.")
+
+            # 2. Bind the manager and give it the listening socket and the close pipe.
+            socket.send_fds(connection, [
+                wayland_request(REGISTRY, 0, manager, "wp_security_context_manager_v1", 1,
+                                MANAGER)                   # bind(name, interface, version, id)
+                + wayland_request(MANAGER, 1, CONTEXT),    # create_listener(id, listen_fd, close_fd)
+            ], [listener.fileno(), close_read])
+            # 3. Label the context and commit it; a refused request arrives
+            #    as a protocol error before the last sync is done.
+            connection.sendall(wayland_request(CONTEXT, 1, "sandkasten")      # set_sandbox_engine
+                               + wayland_request(CONTEXT, 2, "sandkasten3")   # set_app_id
+                               + wayland_request(CONTEXT, 3, instance_id)     # set_instance_id
+                               + wayland_request(CONTEXT, 4)                  # commit
+                               + wayland_request(WL_DISPLAY, 0, LAST_SYNC))   # sync
+            wayland_events(connection, LAST_SYNC)
+        yield sandbox_socket
+    finally:
+        os.close(close_read)
+        os.close(close_write)  # Tells the compositor to stop listening.
+        shutil.rmtree(directory)
+
+
+## Persistent desktop home
+##########################
+
+def copy_wezterm_config(host_home, home, dry_run=False):
+    """Copy wezterm.lua; on the first copy, enable its commented sandbox settings."""
+    wezterm = home / ".config/wezterm/wezterm.lua"
+    is_new = not (wezterm.exists() or wezterm.is_symlink())
+    headless.copy_into_sandbox_home(host_home, home, ".config/wezterm/wezterm.lua",
+                                    dry_run=dry_run)
+    # Only a new copy is patched, so later edits made in the sandbox are kept.
+    if is_new and wezterm.is_file():
+        text = wezterm.read_text()
+        for setting in ("config.use_fancy_tab_bar = false",
+                        'config.colors.tab_bar = { background = "#9C923C" }',
+                        "config.default_prog = { '/usr/bin/fish' }"):
+            text = text.replace("-- " + setting, setting)
+        headless.write_config(home, ".config/wezterm/wezterm.lua", text)
+
+def copy_desktop_files(host_home, home, args, dry_run=False):
+    """Copy desktop configuration and AI state that headless does not copy."""
+    # Short local helper so the lists below stay readable.
+    def copy(path, keep_links=False):
+        headless.copy_into_sandbox_home(host_home, home, path, keep_links=keep_links,
+                                        dry_run=dry_run)
+
+    if args.host_config:
+        # Configuration: links are followed, so the copies become real files.
+        copy(".config/fish/config.fish")
+        copy(".config/fontconfig/conf.d/52-hm-default-fonts.conf")
+        copy(".config/zathura/zathurarc")
+        copy(".config/vale")
+        copy(".config/opencode")
+        copy(".local/bin/juliap")
+        copy(".local/bin/zathura")
+        copy(".local/bin/meld")
+        copy(".local/bin/helix-repl-start.sh")
+        copy(".local/bin/vale-ls")
+        copy(".cargo/bin/simple-completion-language-server")
+        copy_wezterm_config(host_home, home, dry_run)
+
+        # AI state: copied (not mounted live from the host), keeping its links.
+        copy(".local/share/opencode", keep_links=True)
+        # Pi is copied entry by entry, not as a whole. A home first made by
+        # headless already has .pi/agent (auth and settings only), which would
+        # otherwise block copying sessions, npm packages, and so on.
+        pi = host_home / ".pi"
+        if pi.is_dir():
+            for path in sorted(pi.iterdir()):
+                if path.name != "agent":
+                    copy(path, keep_links=True)
+        if (pi / "agent").is_dir():
+            for path in sorted((pi / "agent").iterdir()):
+                copy(path, keep_links=True)
+
+    if args.julia:
+        copy("julia/dot-julia-environments")
+        copy("julia/dot-julia-dev")
+    copy(".cache/Tectonic", keep_links=True)
+
+def write_identity(home, user):
+    """Write passwd/group with Fish as the shell, and keep one machine ID per home."""
+    uid, gid = os.getuid(), os.getgid()
+    headless.write_config(home, ".sandbox-etc/passwd",
+                 "root:x:0:0:root:/root:/usr/sbin/nologin\n"
+                 f"{user}:x:{uid}:{gid}:Sandbox:/home/{user}:/usr/bin/fish\n"
+                 "nobody:x:65534:65534:Nobody:/:/usr/sbin/nologin\n")
+    headless.write_config(home, ".sandbox-etc/group", f"root:x:0:\n{user}:x:{gid}:\nnobody:x:65534:\n")
+    # The private D-Bus needs a machine ID (32 hex characters). Create it once
+    # and keep it across restarts.
+    machine_id = home / ".sandbox-etc/machine-id"
+    if machine_id.is_symlink():
+        raise ValueError(f"Refusing symlinked machine ID: {machine_id}")
+    elif not machine_id.exists():
+        headless.write_config(home, ".sandbox-etc/machine-id", secrets.token_hex(16) + "\n")
+    elif not re.fullmatch(r"[0-9a-f]{32}\n?", machine_id.read_text()):
+        raise ValueError(f"Invalid saved machine ID: {machine_id}")
+
+# Text of two managed files. (The \ after """ avoids an empty first line.)
+FONT_CONFIG = """\
+<?xml version="1.0"?>
+<fontconfig>
+  <dir>/opt/sandkasten-tools/share/fonts</dir>
+</fontconfig>
+"""
+
+# Sourced by Fish via --init-command (see build_command). API keys come from
+# the environment and are not saved here.
+FISH_CONFIG = """\
+# Managed by sandkasten3.
+function fish_prompt
+    set_color yellow
+    echo -n '[SANDBOX] '
+    set_color cyan
+    echo -n (prompt_pwd)
+    set_color normal
+    echo -n '> '
+end
+
+set -gx EDITOR hx
+printf '🔒 Sandboxed Environment: %s 🔒\\n' "$PWD"
+"""
+
+def check_nix_references(home, mounted_hashes):
+    """Reject config files or links that refer to unmounted Nix store paths.
+
+    Only configuration and scripts are scanned, not project data, Julia
+    artifacts, Tectonic caches, or AI histories. Linked directories are
+    checked as links, not followed.
+    """
+    # 1. Collect the files and links to check.
+    paths = []
+    for relative in (".config", ".local/bin", ".cargo/bin", ".julia/config",
+                     ".bashrc", ".inputrc", ".gitconfig", ".gitignore.global",
+                     ".pi/agent/settings.json", ".pi/agent/models.json",
+                     ".pi/agent/extensions", ".pi/agent/skills"):
+        top = home / relative
+        paths.append(top)
+        if top.is_dir() and not top.is_symlink():
+            # os.walk does not follow linked directories; they are checked as links.
+            for root, directories, files in os.walk(top):
+                if ".git" in directories:
+                    directories.remove(".git")
+                paths += [Path(root, name) for name in directories + files]
+    # 2. Look for /nix/store/<hash> in each file, or in each link's target.
+    errors = []
+    for path in paths:
+        if path.is_symlink():
+            data = os.fsencode(os.readlink(path))  # Also catches dangling links.
+        elif path.is_file():
+            data = path.read_bytes()
+        else:
+            continue
+        # rb"..." is a pattern for bytes, so files need not be valid text.
+        for found in sorted(set(re.findall(rb"/nix/store/([0-9a-z]{32})", data))):
+            store_hash = found.decode()
+            if store_hash not in mounted_hashes:
+                errors.append(f"  {path}: /nix/store/{store_hash}")
+    if errors:
+        raise ValueError("Configuration refers to unmounted Nix store paths:\n" +
+                         "\n".join(errors) +
+                         "\nReplace those references or add the packages to sandbox-tools.nix.")
+
+def prepare_sandbox_home(host_home, sandbox_home, user, *, args, nix_hashes, dry_run=False):
+    """Add desktop files after the shared copies, then refresh managed settings."""
+    copy_desktop_files(host_home, sandbox_home, args, dry_run=dry_run)
+    if dry_run:
+        print("Would refresh identity, font and Fish files, then check Nix references.",
+              file=sys.stderr)
+    else:
+        # Rewritten on every launch, so they always match this launcher.
+        write_identity(sandbox_home, user)
+        headless.write_config(sandbox_home, ".config/fontconfig/conf.d/10-sandkasten-fonts.conf", FONT_CONFIG)
+        headless.write_config(sandbox_home, ".config/fish/sandbox.fish", FISH_CONFIG)
+        # Stop before launching if the config needs store paths that are not mounted.
+        check_nix_references(sandbox_home, nix_hashes)
+
+
+## Extend the headless command
+##############################
+
+def build_command(project, sandbox_home, temp, user, host_env, set_julia_path, *,
+                  gpu, nix_binds, runtime, socket):
+    """Return the headless argv with desktop mounts, environment, and WezTerm."""
+    # Start from the headless command and cut off its final Bash invocation:
+    # all bwrap options must come before the program to run.
+    command = headless.build_command(project, sandbox_home, temp, user, host_env, set_julia_path)
+    tail = ["--chdir", str(project), nl, "/bin/bash", "--noprofile", "-i"]
+    if command[-len(tail):] != tail:
+        raise ValueError("The headless command tail changed; update the desktop adapter")
+    command = command[:-len(tail)]
+
+    home = f"/home/{user}"
+    path = f"/opt/sandkasten-tools/bin:{home}/.local/bin:{home}/.cargo/bin"
+    if set_julia_path:
+        path += f":{home}/.juliaup/bin"
+    path += ":/usr/local/bin:/usr/bin:/bin"
+
+    command += [
+        "--new-session", nl,
+        *headless.ro_bind_opt("/etc/fonts"), nl,
+        *headless.ro_bind_opt("/etc/hostname"), nl,
+        *headless.ro_bind(sandbox_home / ".sandbox-etc/machine-id", "/etc/machine-id"), nl,
+        *nix_binds,
+        # A private runtime directory holding only the Wayland socket.
+        "--perms", "0700", "--dir", str(runtime), nl,
+        *headless.ro_bind(socket, runtime / "wayland-0"), nl,
+    ]
+    # The headless --dev /dev is a minimal private /dev; only add render nodes.
+    if gpu:
+        for device in sorted(Path("/dev/dri").glob("renderD*")):
+            command += ["--dev-bind", str(device), str(device), nl]
+        # Mesa picks the driver (e.g. radeonsi) from the device's sysfs entry:
+        # /sys/dev/char/<major:minor> links into /sys/devices. Without it,
+        # Mesa falls back to software rendering (llvmpipe).
+        command += [*headless.ro_bind("/sys/dev"), nl, *headless.ro_bind("/sys/devices"), nl]
+    else:
+        command += [*headless.setenv("LIBGL_ALWAYS_SOFTWARE", "1"), nl]
+    # Later --setenv options override the headless SHELL and PATH.
+    command += [
+        *headless.setenv("SHELL", "/usr/bin/fish"), nl,
+        *headless.setenv("PATH", path), nl,
+        *headless.setenv("EDITOR", "hx"), nl,
+        *headless.setenv("WAYLAND_DISPLAY", "wayland-0"), nl,
+        *headless.setenv("XDG_RUNTIME_DIR", runtime), nl,
+        *headless.setenv("XDG_SESSION_TYPE", "wayland"), nl,
+        "--chdir", str(project), nl,
+        # D-Bus runs privately inside the sandbox.
+        "/usr/bin/dbus-run-session", "--", "/usr/bin/wezterm",
+    ]
+    if not gpu:
+        command += ["--config", "front_end='Software'"]
+    # A new WezTerm process, so the launcher waits (holding lock and /tmp) until it exits.
+    command += ["start", "--always-new-process", "--cwd", str(project), "--",
+                "/usr/bin/fish", "--init-command", "source ~/.config/fish/sandbox.fish"]
+    return command
+
+
+## Command line
+###############
+
+def make_parser():
+    """Return the headless option parser extended with --gpu."""
+    parser = headless.make_parser()
+    parser.description = __doc__
+    parser.add_argument("--gpu", action="store_true",
+                        help="allow DRI GPU devices (default: software rendering)")
+    parser.add_argument("--full-wayland", action="store_true",
+                        help="mount the normal Wayland socket, which allows privileged "
+                             "protocols such as virtual keyboard, screencopy, and clipboard "
+                             "access (default: a restricted wp_security_context_v1 socket)")
+    return parser
+
+def main():
+    """Check desktop resources, then let the headless launcher run the session."""
+    args = make_parser().parse_args()
+    if not args.dry_run:
+        for executable in ("/usr/bin/fish", "/usr/bin/wezterm", "/usr/bin/dbus-run-session"):
+            if not os.access(executable, os.X_OK):
+                raise ValueError(f"Required desktop executable not found: {executable}")
+    # Also inspected during dry-run, so the preview shows the real mounts.
+    runtime, host_socket = wayland_socket(os.environ)
+    nix_binds, nix_hashes = nix_tools(SCRIPT_DIR)
+    # The restricted socket exists for the whole launch, and stops afterwards.
+    if args.full_wayland:
+        print("Wayland: normal socket, including privileged protocols", file=sys.stderr)
+        wayland = nullcontext(host_socket)  # A with-block helper that does nothing.
+    elif args.dry_run:
+        print("Wayland: would create a restricted wp_security_context_v1 socket", file=sys.stderr)
+        wayland = nullcontext(runtime / "sandkasten-wayland-XXXXXXXX/wayland-0")
+    else:
+        print("Wayland: restricted wp_security_context_v1 socket", file=sys.stderr)
+        wayland = security_context_socket(host_socket, runtime, f"sandkasten3-{os.getpid()}")
+    with wayland as sandbox_socket:
+        # partial(f, x=1) makes a new function that calls f with x=1 added.
+        # So launch() passes its usual arguments, and these desktop ones come along.
+        return headless.launch(
+            args,
+            prepare_home=partial(prepare_sandbox_home, args=args, nix_hashes=nix_hashes),
+            command_builder=partial(build_command, gpu=args.gpu, nix_binds=nix_binds,
+                                    runtime=runtime, socket=sandbox_socket),
+        )
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+        print(f"sandkasten3: {error}", file=sys.stderr)
+        sys.exit(1)

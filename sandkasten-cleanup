@@ -1,102 +1,86 @@
-#!/bin/bash
-#
-# Clean up sandkasten directories and their BTRFS subvolumes
-# Usage: sandkasten-cleanup [dir1] [dir2] ...
-# If no directories specified, cleans all directories in ~/.cache/sandkasten/
+#!/usr/bin/env python3
+"""Remove retained Sandkasten homes and their matching temporary directories."""
 
-CACHE_DIR="$HOME/.cache/sandkasten"
+import importlib.machinery
+import importlib.util
+import os
+import re
+import sys
+from pathlib import Path
 
-if [ ! -d "$CACHE_DIR" ]; then
-    echo "No sandkasten cache directory found at $CACHE_DIR"
-    exit 0
-fi
+# Load the extensionless headless launcher for its shared remove_sandbox_home().
+SCRIPT_DIR = Path(__file__).resolve().parent
+loader = importlib.machinery.SourceFileLoader("sandkasten_headless", str(SCRIPT_DIR / "sandkasten"))
+spec = importlib.util.spec_from_loader(loader.name, loader)
+headless = importlib.util.module_from_spec(spec)
+loader.exec_module(headless)
 
-CACHE_DIR=$(realpath "$CACHE_DIR")
+NAME_RE = re.compile(r"^(?:[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9a-f]{16}|project-[0-9a-f]{12}|project-[0-9a-f]{8})$")
 
-# Function to clean up a single sandbox directory
-cleanup_sandbox_dir() {
-    local requested_dir="$1"
-    local candidate
-    local sandbox_dir
-    local sandbox_basename
 
-    if [[ "$requested_dir" = /* ]]; then
-        candidate="$requested_dir"
-    else
-        candidate="$CACHE_DIR/$requested_dir"
-    fi
+def remove_sandbox(requested: str, cache: Path) -> bool:
+    """Remove a retained sandbox home and its matching temporary directory.
 
-    if [[ "/$requested_dir/" == *"/../"* ]] || [ -L "$candidate" ]; then
-        echo "Refusing unsafe sandbox path: $requested_dir" >&2
-        return 1
-    fi
-    
-    if [ ! -d "$candidate" ]; then
-        echo "Directory does not exist: $candidate" >&2
-        return 1
-    fi
+    Accept a full path or a name relative to the resolved cache directory.
+    Return False for missing or unsafe paths and True after successful cleanup.
+    Try BTRFS subvolume deletion before ordinary removal; propagate filesystem
+    errors. Refuse homes locked by either launcher. Archived launchers do not
+    use this lock, so the caller must ensure their sessions have ended.
+    """
+    raw = Path(requested)
+    candidate = raw if raw.is_absolute() else cache / raw
+    if ".." in raw.parts or candidate.is_symlink():
+        print(f"Refusing unsafe sandbox path: {requested}", file=sys.stderr)
+        return False
+    if not candidate.is_dir():
+        print(f"Directory does not exist: {candidate}", file=sys.stderr)
+        return False
+    sandbox = candidate.resolve()
+    if sandbox.parent != cache or not NAME_RE.fullmatch(sandbox.name):
+        print(f"Refusing path outside the Sandkasten cache or with an invalid name: {requested}",
+              file=sys.stderr)
+        return False
 
-    sandbox_dir=$(realpath "$candidate")
-    sandbox_basename=$(basename "$sandbox_dir")
-    if [ "$(dirname "$sandbox_dir")" != "$CACHE_DIR" ] ||
-       [[ ! "$sandbox_basename" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9a-f]{16}$ ]]; then
-        echo "Refusing path outside the Sandkasten cache or with an invalid name: $requested_dir" >&2
-        return 1
-    fi
-    
-    echo "Cleaning up: $sandbox_dir"
-    
-    # Try to delete BTRFS subvolumes first
-    local found_subvolumes=false
-    for subvol in "$sandbox_dir"/.julia "$sandbox_dir"/.juliaup "$sandbox_dir/.cache/Tectonic"; do
-        if [ -L "$subvol" ]; then
-            echo "  Refusing symlinked subvolume path: $subvol" >&2
-        elif [ -d "$subvol" ]; then
-            echo "  Trying to delete BTRFS subvolume: $subvol"
-            if btrfs subvolume delete "$subvol" 2>/dev/null; then
-                echo "  Successfully deleted subvolume: $subvol"
-                found_subvolumes=true
-            fi
-        fi
-    done
-    
-    # Clean up corresponding temp directory
-    local temp_dir="/tmp/sandkasten.tmp.$sandbox_basename"
-    if [ -d "$temp_dir" ]; then
-        echo "  Removing temp directory: $temp_dir"
-        rm -rf "$temp_dir"
-    fi
-    
-    # Remove the entire directory
-    echo "  Removing directory: $sandbox_dir"
-    rm -rf -- "$sandbox_dir"
-    
-    if [ "$found_subvolumes" = true ]; then
-        echo "  ✓ Cleaned up with subvolume deletion"
-    else
-        echo "  ✓ Cleaned up (no subvolumes found)"
-    fi
-}
+    # The launchers' own lock, so a running session is always seen.
+    try:
+        with headless.lock_sandbox_home(sandbox):
+            headless.remove_sandbox_home(sandbox)
+    except headless.SandboxInUse:
+        print(f"Sandbox is still running: {sandbox}", file=sys.stderr)
+        return False
+    return True
 
-# If arguments provided, clean only those directories
-if [ $# -gt 0 ]; then
-    for dir in "$@"; do
-        cleanup_sandbox_dir "$dir"
-    done
-else
-    # Clean all directories in cache
-    echo "Cleaning all sandkasten directories in $CACHE_DIR"
-    
-    if [ -z "$(ls -A "$CACHE_DIR" 2>/dev/null)" ]; then
-        echo "No directories found to clean"
-        exit 0
-    fi
-    
-    for sandbox_dir in "$CACHE_DIR"/*; do
-        if [ -d "$sandbox_dir" ]; then
-            cleanup_sandbox_dir "$sandbox_dir"
-        fi
-    done
-    
-    echo "All sandkasten directories cleaned"
-fi
+
+def main(argv: list[str]) -> int:
+    """Clean the requested sandbox homes, or all cached homes if argv is empty.
+
+    Return 1 if any requested home is rejected, otherwise 0. Filesystem errors
+    propagate rather than being converted into an exit status.
+    """
+    home = Path(os.environ.get("HOME", str(Path.home())))
+    cache = home / ".cache/sandkasten"
+    if not cache.is_dir():
+        print(f"No sandkasten cache directory found at {cache}")
+        return 0
+    cache = cache.resolve()
+    if argv:
+        failed = False
+        for requested in argv:
+            failed |= not remove_sandbox(requested, cache)
+        return 1 if failed else 0
+
+    print(f"Cleaning all Sandkasten directories in {cache}")
+    entries = list(cache.iterdir())
+    if not entries:
+        print("No directories found to clean")
+        return 0
+    failed = False
+    for entry in entries:
+        if entry.is_dir() and not entry.is_symlink():
+            failed |= not remove_sandbox(str(entry), cache)
+    print("All Sandkasten directories cleaned")
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))
