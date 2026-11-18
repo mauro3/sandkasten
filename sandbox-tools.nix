@@ -29,6 +29,7 @@ pkgs.buildEnv {
     marksman
     opencode
     pi-coding-agent
+    claude-code
     pdftk
     tectonic
     vale
